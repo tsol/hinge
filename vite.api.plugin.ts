@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite'
-import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync, statSync } from 'fs'
-import { resolve, relative, sep, basename } from 'path'
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync, rmSync, statSync } from 'fs'
+import { resolve, relative, sep, basename, dirname } from 'path'
 import { execFileSync } from 'child_process'
 
 export interface FileEntry {
@@ -98,16 +98,47 @@ function readFilePath(filePath: string): string | null {
   }
 }
 
+// ──────────────────────────────────────────
+// Task folder format: .hinge/<ts>_<status>/
+//   - input.md  — the markdown content
+//   - attach/   — attached files
+// ──────────────────────────────────────────
+
+function getQueueDir(): string {
+  return resolve(process.cwd(), '.hinge')
+}
+
+function getTaskFolder(name: string): string {
+  return resolve(getQueueDir(), name)
+}
+
+function getInputMdPath(name: string): string {
+  return resolve(getTaskFolder(name), 'input.md')
+}
+
+function getAttachDir(name: string): string {
+  return resolve(getTaskFolder(name), 'attach')
+}
+
+function getTaskStatus(name: string): 'wait' | 'done' {
+  return name.endsWith('_done') ? 'done' : 'wait'
+}
+
 function appendToQueue(payload: QueuePayload) {
-  const queueDir = resolve(process.cwd(), '.hinge')
+  const queueDir = getQueueDir()
   if (!existsSync(queueDir)) {
     mkdirSync(queueDir, { recursive: true })
   }
   const ts = new Date().toISOString().replace(/:/g, '-').replace('.', '_')
-  const filePath = resolve(queueDir, `${ts}_wait.md`)
+  const folderName = `${ts}_wait`
+  const folderPath = resolve(queueDir, folderName)
 
-  const basename = payload.filePath ? payload.filePath.split('/').pop() || '' : ''
-  const title = basename || payload.component || 'untitled'
+  mkdirSync(folderPath, { recursive: true })
+
+  const filePath = resolve(folderPath, 'input.md')
+
+  const title = payload.filePath ? payload.filePath.split('/').pop() || '' : ''
+  const componentName = payload.component || 'untitled'
 
   const lines: string[] = [
     `### ${title}`,
@@ -132,66 +163,106 @@ function appendToQueue(payload: QueuePayload) {
 }
 
 function listQueue(): QueueItem[] {
-  const queueDir = resolve(process.cwd(), '.hinge')
+  const queueDir = getQueueDir()
   if (!existsSync(queueDir)) return []
+
   const entries = readdirSync(queueDir, { withFileTypes: true })
   const items: QueueItem[] = []
+
   for (const e of entries) {
-    if (!e.isFile()) continue
-    if (!e.name.endsWith('.md')) continue
-    const status = e.name.endsWith('_done.md') ? 'done' : 'wait'
-    const abs = resolve(queueDir, e.name)
-    const content = readFileSync(abs, 'utf-8')
-    const component = (content.match(/^### (.+)/m)?.[1]) ?? basename(e.name, '.md')
+    if (!e.isDirectory()) continue
+    const name = e.name
+    // Skip system dirs and non-task dirs
+    if (name.startsWith('.')) continue
+    if (!name.includes('_wait') && !name.includes('_done')) continue
+
+    const status = getTaskStatus(name)
+    const inputMdPath = getInputMdPath(name)
+
+    if (!existsSync(inputMdPath)) continue
+    const content = readFileSync(inputMdPath, 'utf-8')
+    const component = (content.match(/^### (.+)/m)?.[1]) ?? name
     const note = (content.match(/\*\*Note:\*\* (.+)/)?.[1]) ?? ''
     const url = (content.match(/\*\*URL:\*\* (.+)/)?.[1]) ?? ''
     const dom = (content.match(/\*\*DOM:\*\* (.+)/)?.[1]) ?? ''
-    items.push({ name: e.name, status, content, component, note, url, dom })
+
+    items.push({ name, status, content, component, note, url, dom })
   }
+
   items.sort((a, b) => b.name.localeCompare(a.name)) // newest first
   return items
 }
 
-function toggleQueueItem(filename: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const abs = resolve(queueDir, filename)
-  if (!existsSync(abs)) return false
-  const newName = filename.endsWith('_done.md')
-    ? filename.replace('_done.md', '_wait.md')
-    : filename.replace('_wait.md', '_done.md')
-  const newAbs = resolve(queueDir, newName)
-  renameSync(abs, newAbs)
+function toggleQueueItem(name: string): boolean {
+  const folderPath = getTaskFolder(name)
+  if (!existsSync(folderPath)) return false
+
+  const newName = name.endsWith('_done')
+    ? name.replace('_done', '_wait')
+    : name.replace('_wait', '_done')
+  const newPath = resolve(getQueueDir(), newName)
+
+  renameSync(folderPath, newPath)
   return true
 }
 
-function deleteQueueItem(filename: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const abs = resolve(queueDir, filename)
-  if (!existsSync(abs)) return false
-  unlinkSync(abs)
+function deleteQueueItem(name: string): boolean {
+  const folderPath = getTaskFolder(name)
+  if (!existsSync(folderPath)) return false
+
+  rmSync(folderPath, { recursive: true, force: true })
   return true
 }
 
-function updateQueueItemNote(filename: string, newNote: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const abs = resolve(queueDir, filename)
-  if (!existsSync(abs)) return false
-  const content = readFileSync(abs, 'utf-8')
-  // Replace the **Note:** line; if not found, append it after the heading
+function updateQueueItemNote(name: string, newNote: string): boolean {
+  const mdPath = getInputMdPath(name)
+  if (!existsSync(mdPath)) return false
+
+  const content = readFileSync(mdPath, 'utf-8')
   const updated = content.replace(
     /^(\*\*Note:\*\* ).*/m,
     (_, prefix) => `${prefix}${newNote}`
   )
   if (updated === content) {
-    // No **Note:** line found — insert after first heading
     const withNote = content.replace(
       /^(#+ .+)/m,
       `$1\n**Note:** ${newNote}`
     )
-    writeFileSync(abs, withNote, 'utf-8')
+    writeFileSync(mdPath, withNote, 'utf-8')
   } else {
-    writeFileSync(abs, updated, 'utf-8')
+    writeFileSync(mdPath, updated, 'utf-8')
   }
+  return true
+}
+
+// ──────────────────────────────────────────
+// Attachments API
+// ──────────────────────────────────────────
+
+function listAttachments(folderName: string): { name: string; size: number }[] {
+  const attachDir = getAttachDir(folderName)
+  if (!existsSync(attachDir)) return []
+
+  const entries = readdirSync(attachDir, { withFileTypes: true })
+  const files: { name: string; size: number }[] = []
+
+  for (const e of entries) {
+    if (!e.isFile()) continue
+    if (e.name.startsWith('.')) continue
+    try {
+      const stat = statSync(resolve(attachDir, e.name))
+      files.push({ name: e.name, size: stat.size })
+    } catch { /* skip */ }
+  }
+
+  files.sort((a, b) => a.name.localeCompare(b.name))
+  return files
+}
+
+function deleteAttachment(folderName: string, fileName: string): boolean {
+  const filePath = resolve(getAttachDir(folderName), fileName)
+  if (!existsSync(filePath)) return false
+  unlinkSync(filePath)
   return true
 }
 
@@ -255,6 +326,7 @@ export function hingeApiPlugin(): Plugin {
               return
             }
             const abs = resolve(process.cwd(), filePath)
+            mkdirSync(dirname(abs), { recursive: true })
             writeFileSync(abs, content, 'utf-8')
             res.setHeader('Content-Type', 'application/json')
             res.end(JSON.stringify({ ok: true }))
@@ -275,7 +347,7 @@ export function hingeApiPlugin(): Plugin {
         const chunks: Buffer[] = []
         req.on('data', (chunk: Buffer) => chunks.push(chunk))
         req.on('end', async () => {
-          const tmpPath = resolve(process.cwd(), `.hinge/_recording_${Date.now()}.webm`)
+          const tmpPath = resolve(getQueueDir(), `_recording_${Date.now()}.webm`)
           try {
             writeFileSync(tmpPath, Buffer.concat(chunks))
             const script = `
@@ -303,6 +375,7 @@ for seg in segments:
         })
       })
 
+      // ─── Task queue endpoints ────────────────
       server.middlewares.use('/api/queue', (req, res) => {
         // GET — list queue items
         if (req.method === 'GET') {
@@ -311,7 +384,7 @@ for seg in segments:
           return
         }
 
-        // DELETE — delete a queue item
+        // DELETE — delete a queue item (folder)
         if (req.method === 'DELETE') {
           const url = new URL(req.url ?? '', `http://${req.headers.host}`)
           const file = url.searchParams.get('file')
@@ -393,6 +466,150 @@ for seg in segments:
         res.statusCode = 405
         res.end(JSON.stringify({ error: 'method not allowed' }))
       })
+
+      // ─── Attachments endpoints ────────────────
+      server.middlewares.use('/api/queue/attach', (req, res) => {
+        const url = new URL(req.url ?? '', `http://${req.headers.host}`)
+        const folder = url.searchParams.get('folder')
+
+        // GET — list attachments for a task folder
+        if (req.method === 'GET') {
+          if (!folder) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'missing folder param' }))
+            return
+          }
+          const files = listAttachments(folder)
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify(files))
+          return
+        }
+
+        // DELETE — remove an attachment
+        if (req.method === 'DELETE') {
+          if (!folder) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'missing folder param' }))
+            return
+          }
+          const fileName = url.searchParams.get('file')
+          if (!fileName) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'missing file param' }))
+            return
+          }
+          const ok = deleteAttachment(folder, fileName)
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ ok }))
+          return
+        }
+
+        // POST — upload an attachment
+        if (req.method === 'POST') {
+          if (!folder) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'missing folder param' }))
+            return
+          }
+          const contentType = req.headers['content-type'] || ''
+          if (!contentType.startsWith('multipart/form-data')) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'multipart/form-data required' }))
+            return
+          }
+
+          const attachDir = getAttachDir(folder)
+          mkdirSync(attachDir, { recursive: true })
+
+          const chunks: Buffer[] = []
+          req.on('data', (chunk: Buffer) => chunks.push(chunk))
+          req.on('end', () => {
+            try {
+              const fullBody = Buffer.concat(chunks)
+              const boundary = contentType.split('boundary=')[1]
+              if (!boundary) {
+                res.statusCode = 400
+                res.end(JSON.stringify({ error: 'no boundary' }))
+                return
+              }
+              // Naive multipart parser — extract filename and content
+              const boundaryBuf = Buffer.from(`--${boundary}`)
+              const parts = splitBuffer(fullBody, boundaryBuf)
+                .filter(p => p.length > 0 && !startsWithBuffer(p, Buffer.from('--\r\n')) && !startsWithBuffer(p, Buffer.from('--')))
+              for (const part of parts) {
+                const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'))
+                if (headerEnd === -1) continue
+                const headers = part.slice(0, headerEnd).toString('utf-8')
+                const data = part.slice(headerEnd + 4)
+                // Trim trailing \r\n
+                const trimmed = data.slice(0, data.length - 2)
+                const match = headers.match(/name="([^"]+)"(?:; filename="([^"]+)")?/)
+                if (match && match[2]) {
+                  // Save the file
+                  const filePath = resolve(attachDir, match[2])
+                  writeFileSync(filePath, trimmed)
+                }
+              }
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true }))
+            } catch (e: any) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: e.message || 'upload failed' }))
+            }
+          })
+          return
+        }
+
+        res.statusCode = 405
+        res.end(JSON.stringify({ error: 'method not allowed' }))
+      })
+
+      // Serve attachment files from .hinge/<folder>/attach/<file>
+      server.middlewares.use('/api/queue/attach-file', (req, res) => {
+        const url = new URL(req.url ?? '', `http://${req.headers.host}`)
+        const folder = url.searchParams.get('folder')
+        const file = url.searchParams.get('file')
+        if (!folder || !file) {
+          res.statusCode = 400
+          res.end('missing folder or file param')
+          return
+        }
+        const abs = resolve(getAttachDir(folder), file)
+        if (!existsSync(abs)) {
+          res.statusCode = 404
+          res.end('not found')
+          return
+        }
+        // Guess MIME type from extension
+        const ext = file.split('.').pop()?.toLowerCase()
+        const mimeMap: Record<string, string> = {
+          png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+          gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+          pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown',
+        }
+        res.setHeader('Content-Type', mimeMap[ext ?? ''] || 'application/octet-stream')
+        const data = readFileSync(abs)
+        res.end(data)
+      })
     },
   }
+}
+
+// ─── Buffer helpers ───────────────────────
+function splitBuffer(buf: Buffer, delimiter: Buffer): Buffer[] {
+  const parts: Buffer[] = []
+  let start = 0
+  let idx = buf.indexOf(delimiter, start)
+  while (idx !== -1) {
+    parts.push(buf.slice(start, idx))
+    start = idx + delimiter.length
+    idx = buf.indexOf(delimiter, start)
+  }
+  parts.push(buf.slice(start))
+  return parts
+}
+
+function startsWithBuffer(buf: Buffer, prefix: Buffer): boolean {
+  if (buf.length < prefix.length) return false
+  return buf.slice(0, prefix.length).equals(prefix)
 }

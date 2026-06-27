@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
+import HingeAttach from './HingeAttach.vue'
 
 interface QueueItem {
   name: string
@@ -71,11 +72,11 @@ function statusIcon(status: string) {
 }
 
 function timeLabel(name: string) {
-  const stem = name.replace(/(_wait|_done)\.md$/, '')
+  // Folder name format: 2026-06-27T20-28-43_403Z_wait
+  const stem = name.replace(/(_wait|_done)$/, '')
   const parts = stem.split('_')
   const ts = parts[0] // "2026-06-27T20-28-43"
   const [datePart, timePart] = ts.split('T')
-  // timePart has hyphens where colons should be: "20-28-43"
   const time = (timePart || '').replace(/-/g, ':')
   return `${datePart} ${time}`
 }
@@ -99,11 +100,11 @@ async function saveFile(name: string) {
   if (content === undefined) return
   saving.value = { ...saving.value, [name]: true }
   try {
-    // Write back to .hinge/<filename>
+    // Write back to .hinge/<name>/input.md
     await fetch('/api/write-file', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: `.hinge/${name}`, content }),
+      body: JSON.stringify({ path: `.hinge/${name}/input.md`, content }),
     })
   } catch { /* ignore */ }
   saving.value = { ...saving.value, [name]: false }
@@ -149,6 +150,7 @@ async function saveFile(name: string) {
               >
                 {{ item.status === 'done' ? '⏳ Wait' : '✅ Done' }}
               </button>
+              <HingeAttach :folder="item.name" />
             </div>
             <button
               class="qr-btn qr-btn--save"
@@ -304,10 +306,12 @@ async function saveFile(name: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 6px;
 }
 .qr-card__save-left {
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 .qr-btn--save {
   background: #1f6feb;
@@ -320,7 +324,7 @@ async function saveFile(name: string) {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.12s;
+  transition: opacity 0.15s;
 }
 .qr-btn:hover { opacity: 0.8; }
 .qr-btn--done { background: #238636; color: #fff; }

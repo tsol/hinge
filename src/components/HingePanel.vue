@@ -6,6 +6,7 @@ import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
 import HingeAttention from './HingeAttention.vue'
 import HingeTabQueue from './HingeTabQueue.vue'
+import HingeAttach from './HingeAttach.vue'
 import hljs from 'highlight.js/lib/core'
 import 'highlight.js/styles/github-dark.css'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -282,6 +283,7 @@ watch(() => selection.filePath, (filePath) => {
               >
                 {{ recording ? '🔴' : '🎤' }}
               </button>
+              <HingeAttach v-if="editingFile" :folder="editingFile" />
               <button
                 class="drawer-btn drawer-btn--add"
                 :disabled="!note.trim()"

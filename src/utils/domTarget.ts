@@ -20,7 +20,16 @@ const SEMANTIC_TAGS = new Set([
 const BORING_CLASS_PREFIXES = ['v-application', 'v-main', 'v-overlay', 'v-toolbar']
 
 function isHingeElement(el: Element): boolean {
-  return !!el.closest(`#${HINGE_ROOT_ID}`)
+  // Check by container
+  if (el.closest(`#${HINGE_ROOT_ID}`)) return true
+  // Teleported hinge UI elements (direct body children)
+  const cls = el.classList
+  if (cls.contains('cog-wrap') || cls.contains('cog-icon') || cls.contains('cog-list') ||
+      cls.contains('menu-toggle') || cls.contains('burger-icon') ||
+      cls.contains('hinge-panel-wrapper') || cls.contains('drawer') || cls.contains('drawer-backdrop')) {
+    return true
+  }
+  return false
 }
 
 function isBoringElement(el: Element): boolean {

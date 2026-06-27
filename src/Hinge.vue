@@ -1,17 +1,27 @@
 <template>
   <Teleport to="body">
     <div id="hinge-app">
-      <HingeHighlight :rect="highlightRect" />
+      <HingeMenuToggle
+        :menu-open="isOpen"
+        @toggle="isOpen = !isOpen"
+      />
 
       <HingeCog
         :open="isOpen"
         :cog-style="cogStyle"
-        :target-label="targetLabel"
-        @pointerdown="onCogPointerDown"
+        :position-x="position.x"
+        :position-y="position.y"
+        :layer-active="gearLayerActive"
+        :candidate-labels="candidateLabels"
+        :candidate-index="candidateIndex"
+        :collapsed="collapsed"
+        :collapsed-label="collapsedLabel"
+        @pointerdown="handleGearPointerDown"
         @pointermove="onCogPointerMove"
         @pointerup="onCogPointerUp"
         @pointercancel="onCogPointerUp"
-        @contextmenu="onCogContextMenu"
+        @togglayer="onToggleLayer"
+        @select="onSelectCandidate"
       />
 
       <HingePanel
@@ -26,50 +36,100 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import './host'
+import HingeMenuToggle from './components/HingeMenuToggle.vue'
 import HingeCog from './components/HingeCog.vue'
-import HingeHighlight from './components/HingeHighlight.vue'
 import HingePanel from './components/HingePanel.vue'
 import { useCogDrag } from './composables/useCogDrag'
 import { useCogPosition } from './composables/useCogPosition'
-import { useElementHighlight } from './composables/useElementHighlight'
 import { useQueueSubmit } from './composables/useQueueSubmit'
 import { useTargetComponent } from './composables/useTargetComponent'
+import { useSelectionStore } from './composables/useSelectionStore'
 
 const isOpen = ref(false)
+const gearLayerActive = ref(false)
+
+const collapsed = ref(false)
+let collapseTimer: ReturnType<typeof setTimeout> | null = null
 
 const { position, cogStyle, clampPosition } = useCogPosition()
-const { target, targetLabel, selectedElement, cycleTarget } =
-  useTargetComponent(position)
-const { rect: highlightRect, update: updateHighlightRect } =
-  useElementHighlight(selectedElement)
-const { note, sendNote } = useQueueSubmit({
-  getTarget: () => target.value,
-  getElement: () => selectedElement.value,
+const {
+  onCogPointerDown,
+  onCogPointerMove,
+  onCogPointerUp,
+} = useCogDrag({
+  position,
+  clampPosition,
+})
+const { target, candidateLabels, candidateIndex, selectCandidate, refreshOnUserAction } = useTargetComponent(position)
+
+const collapsedLabel = computed(() => {
+  const t = target.value
+  return t.component || t.dom || 'unknown'
 })
 
-watch(selectedElement, () => updateHighlightRect())
+const { note, sendNote } = useQueueSubmit({
+  getTarget: () => target.value,
+  getElement: () => null,
+})
 
-function togglePanel() {
-  isOpen.value = !isOpen.value
+function handleGearPointerDown(e: PointerEvent) {
+  refreshOnUserAction()
+  onCogPointerDown(e)
 }
 
-const { onCogPointerDown, onCogPointerMove, onCogPointerUp, onCogContextMenu } =
-  useCogDrag({
-    position,
-    clampPosition,
-    onTap: () => {
-      cycleTarget()
-      updateHighlightRect()
-    },
-    onPanelToggle: togglePanel,
-  })
+function startCollapseTimer() {
+  clearTimeout(collapseTimer)
+  collapseTimer = setTimeout(() => {
+    collapsed.value = true
+  }, 3000)
+}
 
-async function handleSend() {
-  await sendNote(() => {
-    isOpen.value = false
-  })
+function resetCollapse() {
+  collapsed.value = false
+  clearTimeout(collapseTimer)
+  startCollapseTimer()
+}
+
+onMounted(() => {
+  startCollapseTimer()
+})
+
+onUnmounted(() => {
+  clearTimeout(collapseTimer)
+})
+
+// When position changes (user moves gear) → expand + reset timer
+watch(
+  () => [position.x, position.y],
+  () => resetCollapse(),
+)
+
+function onToggleLayer() {
+  gearLayerActive.value = !gearLayerActive.value
+}
+
+function onSelectCandidate(index: number) {
+  selectCandidate(index)
+  resetCollapse()
+}
+
+// Sync gear selection → unified store
+const { selection: storeSel, fromGear } = useSelectionStore()
+
+watch(
+  () => target.value.component,
+  async (comp) => {
+    if (!comp) return
+    const t = target.value
+    await fromGear(comp, t.dom, t.url, t.props)
+  },
+  { immediate: true },
+)
+
+async function handleSend(onSuccess?: () => void) {
+  await sendNote(onSuccess)
 }
 </script>
 

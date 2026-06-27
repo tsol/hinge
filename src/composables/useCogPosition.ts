@@ -15,11 +15,17 @@ function getViewportBounds() {
 }
 
 export function useCogPosition() {
-  const position = reactive<CogPosition>({ x: 20, y: 20 })
+  const position = reactive<CogPosition>({ x: 0, y: 0 })
 
   const cogStyle = computed(() => ({
     transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
   }))
+
+  function centerPosition() {
+    const { width, height } = getViewportBounds()
+    position.x = Math.max(0, (width - COG_SIZE) / 2)
+    position.y = Math.max(0, (height - COG_SIZE) / 2)
+  }
 
   function clampPosition() {
     const { width, height } = getViewportBounds()
@@ -30,6 +36,7 @@ export function useCogPosition() {
   }
 
   onMounted(() => {
+    centerPosition()
     clampPosition()
     window.addEventListener('resize', clampPosition)
     window.visualViewport?.addEventListener('resize', clampPosition)

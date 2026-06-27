@@ -147,6 +147,45 @@ const highlightedCode = computed(() => {
   return `<code class="hljs">${hljs.highlightAuto(content).value}</code>`
 })
 
+// Voice recording
+const noteTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const recording = ref(false)
+let mediaRecorder: MediaRecorder | null = null
+let audioChunks: Blob[] = []
+
+function startRecording() {
+  if (recording.value) return
+  audioChunks = []
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data) }
+    mediaRecorder.onstop = async () => {
+      // Stop all tracks
+      stream.getTracks().forEach(t => t.stop())
+      if (audioChunks.length === 0) return
+      const blob = new Blob(audioChunks, { type: 'audio/webm' })
+      try {
+        const res = await fetch('/api/transcribe', { method: 'POST', body: blob })
+        const { text, error: err } = await res.json()
+        if (err) throw new Error(err)
+        if (text && noteTextareaRef.value) {
+          note.value = (note.value ? note.value + '\n' : '') + text
+        }
+      } catch { /* silent */ }
+      audioChunks = []
+    }
+    mediaRecorder.start()
+    recording.value = true
+  }).catch(() => { /* no mic permission */ })
+}
+
+function stopRecording() {
+  if (!recording.value || !mediaRecorder) return
+  recording.value = false
+  mediaRecorder.stop()
+  mediaRecorder = null
+}
+
 // When source tab activated or selection.filePath changes → load file content
 watch([activeTab, () => selection.filePath], async ([tab, file]) => {
   if (tab !== 'source' || !file) return
@@ -188,12 +227,23 @@ watch(() => selection.filePath, (filePath) => {
 
           <div class="input-scroll">
             <textarea
+              ref="noteTextareaRef"
               class="drawer-textarea"
               :value="note"
               @input="note = ($event.target as HTMLTextAreaElement).value"
               placeholder="Заметка / описание..."
               rows="3"
             ></textarea>
+            <button
+              class="mic-btn"
+              :class="{ 'mic-btn--recording': recording }"
+              @pointerdown.prevent="startRecording"
+              @pointerup.prevent="stopRecording"
+              @pointerleave="recording && stopRecording()"
+              :title="recording ? 'Отпустите для отправки' : 'Записать голос'"
+            >
+              {{ recording ? '🔴' : '🎤' }}
+            </button>
 
             <div class="input-actions">
               <button
@@ -433,6 +483,40 @@ watch(() => selection.filePath, (filePath) => {
   overflow: hidden;
 }
 
+/* Voice mic button */
+.mic-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: #30363d;
+  cursor: pointer;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, transform 0.1s;
+  line-height: 1;
+  z-index: 1;
+}
+.mic-btn:hover {
+  background: #484f58;
+}
+.mic-btn:active {
+  transform: scale(0.92);
+}
+.mic-btn--recording {
+  background: #da3633 !important;
+  animation: mic-pulse 0.6s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.5); }
+  50% { box-shadow: 0 0 0 8px rgba(218, 54, 51, 0); }
+}
+
 .input-scroll {
   flex: 1;
   overflow-y: auto;
@@ -442,6 +526,7 @@ watch(() => selection.filePath, (filePath) => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  position: relative;
 }
 
 .input-scroll::-webkit-scrollbar {

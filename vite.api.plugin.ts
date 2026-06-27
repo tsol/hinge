@@ -1,6 +1,7 @@
 import type { Plugin } from 'vite'
 import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync, statSync } from 'fs'
 import { resolve, relative, sep, basename } from 'path'
+import { execFileSync } from 'child_process'
 
 export interface FileEntry {
   name: string
@@ -229,6 +230,72 @@ export function hingeApiPlugin(): Plugin {
         const found = findFile(name)
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify({ path: found }))
+      })
+
+      // PUT /api/write-file — write content to a file
+      server.middlewares.use('/api/write-file', (req, res) => {
+        if (req.method !== 'PUT') {
+          res.statusCode = 405
+          res.end(JSON.stringify({ error: 'PUT only' }))
+          return
+        }
+        let body = ''
+        req.on('data', (chunk: string) => { body += chunk })
+        req.on('end', () => {
+          try {
+            const { path: filePath, content } = JSON.parse(body)
+            if (!filePath || content === undefined || content === null) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: 'missing path or content' }))
+              return
+            }
+            const abs = resolve(process.cwd(), filePath)
+            writeFileSync(abs, content, 'utf-8')
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ ok: true }))
+          } catch {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'invalid request' }))
+          }
+        })
+      })
+
+      // POST /api/transcribe — transcribe audio via faster-whisper (Python subprocess)
+      server.middlewares.use('/api/transcribe', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          res.end(JSON.stringify({ error: 'POST only' }))
+          return
+        }
+        const chunks: Buffer[] = []
+        req.on('data', (chunk: Buffer) => chunks.push(chunk))
+        req.on('end', async () => {
+          const tmpPath = resolve(process.cwd(), `.hinge/_recording_${Date.now()}.webm`)
+          try {
+            writeFileSync(tmpPath, Buffer.concat(chunks))
+            const script = `
+import sys
+from faster_whisper import WhisperModel
+model = WhisperModel('tiny', device='cpu', compute_type='int8')
+segments, _ = model.transcribe(sys.argv[1])
+for seg in segments:
+    print(seg.text)
+`
+            const result = execFileSync('python3', ['-c', script, tmpPath], {
+              encoding: 'utf-8',
+              timeout: 30_000,
+              maxBuffer: 10 * 1024 * 1024,
+            })
+            const text = result.trim().split('\n').map(l => l.trim()).filter(Boolean).join(' ')
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ text }))
+          } catch (e: any) {
+            res.statusCode = 500
+            res.end(JSON.stringify({ error: e.message || 'transcription failed' }))
+          } finally {
+            try { unlinkSync(tmpPath) } catch {}
+          }
+        })
       })
 
       server.middlewares.use('/api/queue', (req, res) => {

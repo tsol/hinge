@@ -32,7 +32,7 @@ export function useQueueSubmit({ getTarget, getElement }: UseQueueSubmitOptions)
 
     const data: QueuePayload = {
       note: note.value,
-      url: window.location.href,
+      url: window.location.pathname + window.location.search,
       component: t.component,
       dom: t.dom,
       props: t.props,

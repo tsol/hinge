@@ -30,6 +30,10 @@ const loading = ref(false)
 const error = ref('')
 const expanded = ref<string | null>(null)
 
+// Per-item: editing state
+const editingContent = ref<Record<string, string>>({})
+const saving = ref<Record<string, boolean>>({})
+
 onMounted(() => loadItems())
 
 watch(() => props.refreshKey, () => {
@@ -71,10 +75,38 @@ function statusIcon(status: string) {
 }
 
 function timeLabel(name: string) {
-  // 2026-06-27T16-11-30_491Z_wait.md
   const parts = name.replace(/(_wait|_done)\.md$/, '').split('_')
   const ts = parts[0].replace(/T/, ' ').replace(/-/g, ':').replace(/:(\d+):(\d+)/, (_, h, m) => `${h}:${m}`)
   return ts.replace(/-/g, '.')
+}
+
+async function expandItem(name: string) {
+  if (expanded.value === name) {
+    expanded.value = null
+    return
+  }
+  expanded.value = name
+  const item = items.value.find(i => i.name === name)
+  if (!item) return
+  // Initialize editor with the current markdown content
+  if (!(name in editingContent.value)) {
+    editingContent.value = { ...editingContent.value, [name]: item.content }
+  }
+}
+
+async function saveFile(name: string) {
+  const content = editingContent.value[name]
+  if (content === undefined) return
+  saving.value = { ...saving.value, [name]: true }
+  try {
+    // Write back to .hinge/<filename>
+    await fetch('/api/write-file', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: `.hinge/${name}`, content }),
+    })
+  } catch { /* ignore */ }
+  saving.value = { ...saving.value, [name]: false }
 }
 </script>
 
@@ -93,7 +125,7 @@ function timeLabel(name: string) {
         class="qr-card"
         :class="{ 'qr-card--done': item.status === 'done', 'qr-card--expanded': expanded === item.name, 'qr-card--editing': props.editingFile === item.name }"
       >
-        <div class="qr-card__header" @click="expanded = expanded === item.name ? null : item.name">
+        <div class="qr-card__header" @click="expandItem(item.name)">
           <span class="qr-card__icon">{{ statusIcon(item.status) }}</span>
           <span class="qr-card__comp">{{ item.component }}</span>
           <span class="qr-card__time">{{ timeLabel(item.name) }}</span>
@@ -101,19 +133,20 @@ function timeLabel(name: string) {
         </div>
 
         <div v-if="expanded === item.name" class="qr-card__body">
-          <div class="qr-card__note" v-if="item.note">{{ item.note }}</div>
-          <div class="qr-card__meta">
-            <span v-if="item.dom"><strong>DOM:</strong> {{ item.dom }}</span>
-            <span v-if="item.url"><strong>URL:</strong> {{ item.url }}</span>
-          </div>
-          <pre class="qr-card__content">{{ item.content }}</pre>
-
-          <div class="qr-card__actions">
-            <button class="qr-btn qr-btn--edit" @click.stop="emit('edit-task', item)">✎ Edit</button>
-            <button class="qr-btn" :class="item.status === 'done' ? 'qr-btn--wait' : 'qr-btn--done'" @click.stop="toggle(item.name)">
-              {{ item.status === 'done' ? '↩ Wait' : '✓ Done' }}
+          <textarea
+            class="qr-card__editor"
+            :value="editingContent[item.name]"
+            @input="editingContent[item.name] = ($event.target as HTMLTextAreaElement).value"
+            spellcheck="false"
+          ></textarea>
+          <div class="qr-card__save-row">
+            <button
+              class="qr-btn qr-btn--save"
+              :disabled="saving[item.name]"
+              @click.stop="saveFile(item.name)"
+            >
+              {{ saving[item.name] ? 'Saving…' : 'Сохранить' }}
             </button>
-            <button class="qr-btn qr-btn--delete" @click.stop="remove(item.name)">✕ Delete</button>
           </div>
         </div>
       </div>
@@ -226,35 +259,44 @@ function timeLabel(name: string) {
 .qr-card__body {
   padding: 0 10px 10px;
   border-top: 1px solid #2a2a4a;
-}
-.qr-card__note {
-  font-size: 13px;
-  color: #e0e0e0;
-  padding: 8px 0 4px;
-}
-.qr-card__meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: #888;
-  padding-bottom: 6px;
+  gap: 6px;
 }
-.qr-card__content {
+.qr-card__file-path {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  color: #666;
+  padding: 6px 0 2px;
+}
+.qr-card__file-path--err {
+  color: #f85149;
+}
+.qr-card__editor {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 11px;
-  color: #888;
-  background: #0d1117;
-  padding: 8px;
-  border-radius: 4px;
-  white-space: pre-wrap;
-  max-height: 200px;
-  overflow-y: auto;
-  margin: 0 0 8px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
 }
-.qr-card__actions {
+.qr-card__editor:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+.qr-card__save-row {
   display: flex;
-  gap: 6px;
+  justify-content: flex-end;
+}
+.qr-btn--save {
+  background: #1f6feb;
+  color: #fff;
 }
 .qr-btn {
   padding: 5px 12px;

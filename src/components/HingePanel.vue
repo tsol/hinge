@@ -186,8 +186,44 @@ function stopRecording() {
   mediaRecorder = null
 }
 
-// When source tab activated or selection.filePath changes → load file content
+// Source edit mode
+const sourceEditMode = ref(false)
+const sourceEditingContent = ref('')
+const sourceSaving = ref(false)
+
+function toggleSourceEdit() {
+  if (!sourceEditMode.value) {
+    // Enter edit mode → populate textarea with raw content
+    sourceEditingContent.value = fileSrc.content.value || ''
+    sourceEditMode.value = true
+  } else {
+    sourceEditMode.value = false
+  }
+}
+
+async function saveSourceFile() {
+  const path = selection.filePath
+  if (!path) return
+  sourceSaving.value = true
+  try {
+    await fetch('/api/write-file', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content: sourceEditingContent.value }),
+    })
+    // Reload file content to reflect changes
+    await fileSrc.loadFile(path)
+    sourceEditMode.value = false
+  } catch { /* ignore */ }
+  sourceSaving.value = false
+}
+
+// When source file changes externally → exit edit mode and reset
 watch([activeTab, () => selection.filePath], async ([tab, file]) => {
+  // Exit edit mode if file changed
+  if (sourceEditMode.value) {
+    sourceEditMode.value = false
+  }
   if (tab !== 'source' || !file) return
   if (!fileSrc.loading.value && fileSrc.path.value === file) return // already loaded
   await fileSrc.loadFile(file)
@@ -234,18 +270,18 @@ watch(() => selection.filePath, (filePath) => {
               placeholder="Заметка / описание..."
               rows="3"
             ></textarea>
-            <button
-              class="mic-btn"
-              :class="{ 'mic-btn--recording': recording }"
-              @pointerdown.prevent="startRecording"
-              @pointerup.prevent="stopRecording"
-              @pointerleave="recording && stopRecording()"
-              :title="recording ? 'Отпустите для отправки' : 'Записать голос'"
-            >
-              {{ recording ? '🔴' : '🎤' }}
-            </button>
 
             <div class="input-actions">
+              <button
+                class="mic-btn"
+                :class="{ 'mic-btn--recording': recording }"
+                @pointerdown.prevent="startRecording"
+                @pointerup.prevent="stopRecording"
+                @pointerleave="recording && stopRecording()"
+                :title="recording ? 'Отпустите для отправки' : 'Записать голос'"
+              >
+                {{ recording ? '🔴' : '🎤' }}
+              </button>
               <button
                 class="drawer-btn drawer-btn--add"
                 :disabled="!note.trim()"
@@ -348,6 +384,13 @@ watch(() => selection.filePath, (filePath) => {
             <span v-if="filePathParts.dir" class="tab-header__dir">{{ filePathParts.dir }}/</span>
             <span v-if="filePathParts.file" class="tab-header__file">{{ filePathParts.file }}</span>
             <span v-else class="tab-header__file tab-header__file--muted">No file selected</span>
+            <button
+              v-if="filePathParts.file"
+              class="source-edit-toggle"
+              :class="{ 'source-edit-toggle--active': sourceEditMode }"
+              @click="toggleSourceEdit"
+              :title="sourceEditMode ? 'Просмотр' : 'Редактировать'"
+            >{{ sourceEditMode ? '👁' : '✎' }}</button>
           </div>
 
           <div v-if="fileSrc.loading.value" class="drawer-body">
@@ -359,7 +402,21 @@ watch(() => selection.filePath, (filePath) => {
           </div>
 
           <div v-else class="drawer-body drawer-body--scroll source-body">
-            <pre class="source-code" v-html="highlightedCode"></pre>
+            <textarea
+              v-if="sourceEditMode"
+              class="source-editor"
+              :value="sourceEditingContent"
+              @input="sourceEditingContent = ($event.target as HTMLTextAreaElement).value"
+              spellcheck="false"
+            ></textarea>
+            <pre v-else class="source-code" v-html="highlightedCode"></pre>
+            <div v-if="sourceEditMode" class="source-save-row">
+              <button
+                class="drawer-btn drawer-btn--save-source"
+                :disabled="sourceSaving"
+                @click="saveSourceFile"
+              >{{ sourceSaving ? 'Saving…' : 'Сохранить' }}</button>
+            </div>
           </div>
         </div>
       </div>
@@ -454,6 +511,30 @@ watch(() => selection.filePath, (filePath) => {
   min-height: 38px;
 }
 
+.source-edit-toggle {
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  margin-left: auto;
+  line-height: 1;
+}
+.source-edit-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ccc;
+}
+.source-edit-toggle--active {
+  color: #58a6ff;
+}
+.source-edit-toggle--active:hover {
+  background: rgba(88, 166, 255, 0.12);
+  color: #58a6ff;
+}
+
 .tab-header__dir {
   overflow: hidden;
   white-space: nowrap;
@@ -485,9 +566,6 @@ watch(() => selection.filePath, (filePath) => {
 
 /* Voice mic button */
 .mic-btn {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
   width: 32px;
   height: 32px;
   border: none;
@@ -495,12 +573,12 @@ watch(() => selection.filePath, (filePath) => {
   background: #30363d;
   cursor: pointer;
   font-size: 15px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   transition: background 0.15s, transform 0.1s;
   line-height: 1;
-  z-index: 1;
+  flex-shrink: 0;
 }
 .mic-btn:hover {
   background: #484f58;
@@ -725,6 +803,8 @@ watch(() => selection.filePath, (filePath) => {
 /* Source viewer */
 .source-body {
   padding: 0 !important;
+  display: flex;
+  flex-direction: column;
 }
 
 .source-code {
@@ -736,6 +816,48 @@ watch(() => selection.filePath, (filePath) => {
   color: #c9d1d9;
   white-space: pre;
   overflow-x: auto;
+  flex: 1;
+}
+
+.source-editor {
+  width: 100%;
+  flex: 1;
+  min-height: 150px;
+  padding: 12px 14px;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: none;
+  border-top: 1px solid #2a2a4a;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: none;
+  box-sizing: border-box;
+}
+.source-editor:focus {
+  outline: none;
+}
+
+.source-save-row {
+  padding: 8px 14px;
+  border-top: 1px solid #2a2a4a;
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.drawer-btn--save-source {
+  background: #1f6feb;
+  color: #fff;
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.drawer-btn--save-source:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Mobile: full-width drawer */

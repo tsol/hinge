@@ -31,6 +31,7 @@
         @send="handleSend"
         @close="isOpen = false"
       />
+
     </div>
   </Teleport>
 </template>
@@ -62,7 +63,7 @@ const {
   position,
   clampPosition,
 })
-const { target, candidateLabels, candidateIndex, selectCandidate, refreshOnUserAction } = useTargetComponent(position)
+const { target, selectedElement, candidateLabels, candidateIndex, selectCandidate, refreshOnUserAction } = useTargetComponent(position)
 
 const collapsedLabel = computed(() => {
   const t = target.value
@@ -80,7 +81,7 @@ function handleGearPointerDown(e: PointerEvent) {
 }
 
 function startCollapseTimer() {
-  clearTimeout(collapseTimer)
+  if (collapseTimer) clearTimeout(collapseTimer)
   collapseTimer = setTimeout(() => {
     collapsed.value = true
   }, 3000)
@@ -88,7 +89,7 @@ function startCollapseTimer() {
 
 function resetCollapse() {
   collapsed.value = false
-  clearTimeout(collapseTimer)
+  if (collapseTimer) clearTimeout(collapseTimer)
   startCollapseTimer()
 }
 
@@ -97,7 +98,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  clearTimeout(collapseTimer)
+  if (collapseTimer) clearTimeout(collapseTimer)
 })
 
 // When position changes (user moves gear) → expand + reset timer
@@ -116,14 +117,14 @@ function onSelectCandidate(index: number) {
 }
 
 // Sync gear selection → unified store
-const { selection: storeSel, fromGear } = useSelectionStore()
+const { fromGear } = useSelectionStore()
 
 watch(
   () => target.value.component,
   async (comp) => {
     if (!comp) return
     const t = target.value
-    await fromGear(comp, t.dom, t.url, t.props)
+    await fromGear(comp, t.dom, '', t.props)
   },
   { immediate: true },
 )

@@ -6,6 +6,19 @@ import { getCycleableTargetsAtPoint, describeElement } from '../utils/domTarget'
 import { formatTargetSummary, resolveTargetFromElement } from '../utils/resolveTarget'
 import type { CogPosition } from './useCogPosition'
 
+const HIGHLIGHT_STYLE = '2.5px solid #58a6ff'
+
+function applyHighlight(el: Element | null) {
+  // Remove highlight from all elements (cleanup stale)
+  document.querySelectorAll('[data-hinge-highlight]').forEach((e) => {
+    e.removeAttribute('data-hinge-highlight')
+    e.removeAttribute('style')
+  })
+  if (!el) return
+  el.setAttribute('data-hinge-highlight', '')
+  el.setAttribute('style', (el.getAttribute('style') || '') + `;outline:${HIGHLIGHT_STYLE};outline-offset:1px`)
+}
+
 export function useTargetComponent(position: Reactive<CogPosition>) {
   const target = ref<HingeTarget>({ ...EMPTY_TARGET })
   const targetLabel = ref(EMPTY_TARGET.component)
@@ -25,6 +38,7 @@ export function useTargetComponent(position: Reactive<CogPosition>) {
       idx,
       list.length,
     )
+    applyHighlight(el)
   }
 
   function rebuildCandidates() {

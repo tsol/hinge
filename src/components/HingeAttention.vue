@@ -15,6 +15,14 @@ const displayName = computed(() =>
   selection.component || props.target.component || '—',
 )
 
+const displayLabel = computed(() =>
+  selection.source === 'file' ? 'File' : 'Component',
+)
+
+const showDetails = computed(() =>
+  selection.source === 'gear' && hasDetails()
+)
+
 function formatValue(value: unknown): string {
   if (typeof value === 'string') return value
   try {
@@ -34,16 +42,16 @@ function hasDetails(): boolean {
   <div
     class="attention"
     :class="{ 'attention--expanded': expanded }"
-    :style="{ cursor: hasDetails() ? 'pointer' : 'default' }"
-    @click="hasDetails() && (expanded = !expanded)"
+    :style="{ cursor: showDetails ? 'pointer' : 'default' }"
+    @click="showDetails && (expanded = !expanded)"
   >
     <div class="attention__head">
-      <span class="attention__label">Component</span>
+      <span class="attention__label">{{ displayLabel }}</span>
       <span class="attention__name">{{ displayName }}</span>
-      <span v-if="hasDetails()" class="attention__chevron">{{ expanded ? '▲' : '▼' }}</span>
+      <span v-if="showDetails" class="attention__chevron">{{ expanded ? '▲' : '▼' }}</span>
     </div>
 
-    <div v-if="expanded && hasDetails()" class="attention__body" @click.stop>
+    <div v-if="expanded && showDetails" class="attention__body" @click.stop>
       <div v-if="target.dom && target.dom !== target.component" class="attention__row">
         <span class="attention__label">DOM</span>
         <span class="attention__dom">{{ target.dom }}</span>

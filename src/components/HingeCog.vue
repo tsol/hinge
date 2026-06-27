@@ -28,7 +28,7 @@ const wrapStyle = computed(() => ({
   zIndex: props.layerActive ? 2147483647 : 1,
 }))
 
-function onGearDblClick(e: MouseEvent) {
+function onGearDblClick(_e: MouseEvent) {
   console.log('[HingeCog] double-click → toggle layer')
   emit('togglayer')
 }
@@ -225,6 +225,8 @@ const listPos = computed(() => {
   background: rgb(0, 100, 220) !important;
   font-weight: 700 !important;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3) !important;
+  outline: 2px solid #58a6ff !important;
+  outline-offset: -2px !important;
 }
 
 .cog-list--collapsed .cog-list__item--active {

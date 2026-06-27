@@ -13,6 +13,7 @@ export interface FileEntry {
 export interface QueuePayload {
   note: string
   url: string
+  filePath: string
   component: string
   dom: string
   props: Record<string, unknown>
@@ -105,9 +106,13 @@ function appendToQueue(payload: QueuePayload) {
   const ts = new Date().toISOString().replace(/:/g, '-').replace('.', '_')
   const filePath = resolve(queueDir, `${ts}_wait.md`)
 
+  const basename = payload.filePath ? payload.filePath.split('/').pop() || '' : ''
+  const title = basename || payload.component || 'untitled'
+
   const lines: string[] = [
-    `### ${payload.component}`,
+    `### ${title}`,
     `**Note:** ${payload.note}`,
+    `**File:** ${payload.filePath || ''}`,
     `**DOM:** ${payload.dom}`,
     `**URL:** ${payload.url}`,
     `**Props:** \`${JSON.stringify(payload.props)}\``,

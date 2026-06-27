@@ -1,4 +1,5 @@
 <template>
+<!-- ро -->
   <section class="dev-grid">
     <DevCard
       v-for="(card, i) in cards"

@@ -11,10 +11,6 @@ interface QueueItem {
   dom: string
 }
 
-const emit = defineEmits<{
-  'edit-task': [item: QueueItem]
-}>()
-
 const props = withDefaults(defineProps<{
   compact?: boolean
   refreshKey?: number
@@ -75,9 +71,13 @@ function statusIcon(status: string) {
 }
 
 function timeLabel(name: string) {
-  const parts = name.replace(/(_wait|_done)\.md$/, '').split('_')
-  const ts = parts[0].replace(/T/, ' ').replace(/-/g, ':').replace(/:(\d+):(\d+)/, (_, h, m) => `${h}:${m}`)
-  return ts.replace(/-/g, '.')
+  const stem = name.replace(/(_wait|_done)\.md$/, '')
+  const parts = stem.split('_')
+  const ts = parts[0] // "2026-06-27T20-28-43"
+  const [datePart, timePart] = ts.split('T')
+  // timePart has hyphens where colons should be: "20-28-43"
+  const time = (timePart || '').replace(/-/g, ':')
+  return `${datePart} ${time}`
 }
 
 async function expandItem(name: string) {
@@ -140,6 +140,16 @@ async function saveFile(name: string) {
             spellcheck="false"
           ></textarea>
           <div class="qr-card__save-row">
+            <div class="qr-card__save-left">
+              <button class="qr-btn qr-btn--delete" @click.stop="remove(item.name)">✕</button>
+              <button
+                class="qr-btn"
+                :class="item.status === 'done' ? 'qr-btn--wait' : 'qr-btn--done'"
+                @click.stop="toggle(item.name)"
+              >
+                {{ item.status === 'done' ? '⏳ Wait' : '✅ Done' }}
+              </button>
+            </div>
             <button
               class="qr-btn qr-btn--save"
               :disabled="saving[item.name]"
@@ -292,7 +302,12 @@ async function saveFile(name: string) {
 }
 .qr-card__save-row {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+}
+.qr-card__save-left {
+  display: flex;
+  gap: 6px;
 }
 .qr-btn--save {
   background: #1f6feb;

@@ -206,6 +206,20 @@ function toggleQueueItem(name: string): boolean {
   return true
 }
 
+function setQueueItemStatus(name: string, status: string): boolean {
+  if (status !== 'wait' && status !== 'done') return false
+  const targetSuffix = `_${status}`
+  if (name.endsWith(targetSuffix)) return true // already that status
+  const folderPath = getTaskFolder(name)
+  if (!existsSync(folderPath)) return false
+
+  const stem = name.replace(/_(wait|done)$/, '')
+  const newName = `${stem}${targetSuffix}`
+  const newPath = resolve(getQueueDir(), newName)
+  renameSync(folderPath, newPath)
+  return true
+}
+
 function deleteQueueItem(name: string): boolean {
   const folderPath = getTaskFolder(name)
   if (!existsSync(folderPath)) return false
@@ -376,7 +390,11 @@ for seg in segments:
       })
 
       // ─── Task queue endpoints ────────────────
-      server.middlewares.use('/api/queue', (req, res) => {
+      server.middlewares.use('/api/queue', (req, res, next) => {
+        // Skip sub-paths (/api/queue/attach, /api/queue/attach-file)
+        // req.url is the portion AFTER '/api/queue', so '/' for exact match
+        if (req.url && req.url !== '/' && req.url.startsWith('/')) return next()
+
         // GET — list queue items
         if (req.method === 'GET') {
           res.setHeader('Content-Type', 'application/json')
@@ -446,13 +464,15 @@ for seg in segments:
           req.on('data', (chunk: string) => { body += chunk })
           req.on('end', () => {
             try {
-              const { file } = JSON.parse(body)
+              const { file, status } = JSON.parse(body)
               if (!file) {
                 res.statusCode = 400
                 res.end(JSON.stringify({ error: 'missing file' }))
                 return
               }
-              const ok = toggleQueueItem(file)
+              const ok = status
+                ? setQueueItemStatus(file, status)
+                : toggleQueueItem(file)
               res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ ok }))
             } catch {

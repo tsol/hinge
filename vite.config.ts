@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import dts from 'vite-plugin-dts'
+import { hingeApiPlugin } from './vite.api.plugin'
 
 export default defineConfig({
   plugins: [
@@ -11,6 +12,7 @@ export default defineConfig({
       outDir: 'dist',
       rollupTypes: true,
     }),
+    hingeApiPlugin(),
   ],
   build: {
     lib: {

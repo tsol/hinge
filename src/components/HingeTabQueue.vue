@@ -51,20 +51,21 @@ async function loadItems() {
   }
 }
 
-function toggle(name: string) {
-  fetch('/api/queue', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: name }),
-  }).then(() => loadItems())
-}
-
 function remove(name: string) {
   fetch(`/api/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
     .then(() => {
       if (expanded.value === name) expanded.value = null
       loadItems()
     })
+}
+
+async function setStatus(name: string, status: string) {
+  await fetch('/api/queue', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name, status }),
+  })
+  loadItems()
 }
 
 function statusIcon(status: string) {
@@ -141,17 +142,13 @@ async function saveFile(name: string) {
             spellcheck="false"
           ></textarea>
           <div class="qr-card__save-row">
-            <div class="qr-card__save-left">
-              <button class="qr-btn qr-btn--delete" @click.stop="remove(item.name)">✕</button>
-              <button
-                class="qr-btn"
-                :class="item.status === 'done' ? 'qr-btn--wait' : 'qr-btn--done'"
-                @click.stop="toggle(item.name)"
-              >
-                {{ item.status === 'done' ? '⏳ Wait' : '✅ Done' }}
-              </button>
-              <HingeAttach :folder="item.name" />
-            </div>
+            <button class="qr-btn qr-btn--delete" @click.stop="remove(item.name)" title="Delete">✕</button>
+            <select class="qr-btn qr-btn--status-select" :value="item.status" @change.stop="setStatus(item.name, ($event.target as HTMLSelectElement).value)">
+              <option value="wait">⏳ Wait</option>
+              <option value="done">✅ Done</option>
+            </select>
+            <HingeAttach :folder="item.name" />
+            <span class="qr-card__save-spacer"></span>
             <button
               class="qr-btn qr-btn--save"
               :disabled="saving[item.name]"
@@ -308,10 +305,17 @@ async function saveFile(name: string) {
   align-items: center;
   gap: 6px;
 }
-.qr-card__save-left {
-  display: flex;
-  gap: 6px;
-  align-items: center;
+.qr-card__save-spacer {
+  flex: 1;
+}
+.qr-btn--status-select {
+  background: #1a1a3a;
+  color: #c9d1d9;
+  border: 1px solid #2a2a4a;
+  padding: 4px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
 }
 .qr-btn--save {
   background: #1f6feb;
@@ -327,8 +331,5 @@ async function saveFile(name: string) {
   transition: opacity 0.15s;
 }
 .qr-btn:hover { opacity: 0.8; }
-.qr-btn--done { background: #238636; color: #fff; }
-.qr-btn--wait { background: #30363d; color: #ccc; }
-.qr-btn--edit { background: #1f6feb; color: #fff; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
 </style>

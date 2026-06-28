@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import type { HingeTarget } from '../types/target'
 import { useFileTree } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
@@ -54,6 +54,48 @@ const fileSrc = useFileSource()
 const queueRefreshKey = ref(0)
 const editingFile = ref('')
 const editingNoteRef = ref('')
+
+// Drawer resizable width
+const STORAGE_KEY = 'hinge-drawer-width'
+const DEFAULT_WIDTH = 380
+const drawerWidth = ref(DEFAULT_WIDTH)
+const resizing = ref(false)
+const drawerRef = ref<HTMLDivElement | null>(null)
+
+onMounted(() => {
+  const saved = localStorage.getItem(STORAGE_KEY)
+  if (saved) {
+    const w = parseInt(saved, 10)
+    if (w >= 260 && w <= 800) drawerWidth.value = w
+  }
+})
+
+function startResize(e: PointerEvent) {
+  resizing.value = true
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = drawerWidth.value
+
+  function onMove(ev: PointerEvent) {
+    const delta = ev.clientX - startX
+    const newW = Math.max(260, Math.min(800, startW + delta))
+    drawerWidth.value = newW
+  }
+
+  function onUp() {
+    resizing.value = false
+    localStorage.setItem(STORAGE_KEY, String(drawerWidth.value))
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp)
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+}
 
 function onAdd() {
   if (editingFile.value) {
@@ -241,9 +283,8 @@ watch(() => selection.filePath, (filePath) => {
 <template>
   <Teleport to="body">
     <div class="hinge-panel-wrapper">
-      <div class="drawer-backdrop" @click="emit('close')"></div>
 
-      <div class="drawer">
+      <div ref="drawerRef" class="drawer" :style="{ width: drawerWidth + 'px' }">
         <!-- Tabs -->
         <div class="drawer-tabs">
           <button
@@ -421,25 +462,22 @@ watch(() => selection.filePath, (filePath) => {
             </div>
           </div>
         </div>
+        <div
+          class="drawer-resize-handle"
+          :class="{ 'drawer-resize-handle--active': resizing }"
+          @pointerdown="startResize"
+        ></div>
       </div>
     </div>
   </Teleport>
 </template>
 
 <style scoped>
-.drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.3);
-  z-index: 99999;
-}
-
 .drawer {
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
-  width: min(85vw, 380px);
   background: #1a1a2e;
   color: #e0e0e0;
   z-index: 100000;
@@ -865,7 +903,28 @@ watch(() => selection.filePath, (filePath) => {
 /* Mobile: full-width drawer */
 @media (max-width: 767px) {
   .drawer {
-    width: 100vw;
+    width: 100vw !important;
   }
+  .drawer-resize-handle {
+    display: none;
+  }
+}
+
+/* Resize handle on the right edge */
+.drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
+  z-index: 1;
+  background: transparent;
+  transition: background 0.15s;
+  transform: translateX(50%);
+}
+.drawer-resize-handle:hover,
+.drawer-resize-handle--active {
+  background: rgba(88, 166, 255, 0.3);
 }
 </style>

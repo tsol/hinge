@@ -78,7 +78,7 @@ function hasDetails(): boolean {
   flex-shrink: 0 !important;
   overflow: hidden !important;
   transition: border-color 0.15s !important;
-  margin: 4px 14px 0 !important;
+  margin: 14px 14px 0 !important;
 }
 .attention--expanded {
   border-color: #58a6ff !important;

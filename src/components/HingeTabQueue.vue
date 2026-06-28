@@ -85,9 +85,18 @@ async function refreshItems() {
     const res = await fetch('/api/queue')
     if (!res.ok) return
     const fresh: QueueItem[] = await res.json()
+    // Track which tasks were processing before this refresh
+    const wasProcessing = new Set(
+      items.value.filter(i => i.status === 'processing').map(i => i.name)
+    )
     for (const item of fresh) {
-      if (item.name in editingContent.value) {
+      // Preserve unsaved edits only for tasks that were NOT processing
+      // (processing tasks get fresh content from server — agent appended response)
+      if (item.name in editingContent.value && !wasProcessing.has(item.name)) {
         ;(item as any).content = editingContent.value[item.name]
+      } else {
+        // Update editing content with fresh server data (e.g. agent reply)
+        editingContent.value = { ...editingContent.value, [item.name]: item.content }
       }
     }
     items.value = fresh
@@ -307,9 +316,9 @@ async function saveFile(name: string) {
             <HingeAttach :folder="item.name" />
             <span class="qr-card__save-spacer"></span>
             <button
-              class="qr-btn qr-btn--exec"
+              class="qr-btn qr-btn--run"
               @click.stop="executeSingle(item.name)"
-            >▶ Run Agent</button>
+            title="Run Agent">▶</button>
             <button
               class="qr-btn qr-btn--save"
               :disabled="saving[item.name]"
@@ -538,6 +547,7 @@ async function saveFile(name: string) {
 .qr-btn:hover { opacity: 0.8; }
 .qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
+.qr-btn--run { background: #238636; color: #fff; font-size: 14px; padding: 4px 10px; }
 
 /* Agent output */
 .qr-card__select {

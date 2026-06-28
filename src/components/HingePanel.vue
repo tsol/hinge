@@ -157,11 +157,7 @@ function onEditTask(item: { name: string; content: string }) {
   note.value = item.content
 }
 
-// Execute agent
-const executing = ref(false)
-const execResult = ref('')
-const execError = ref(false)
-
+// Execute agent — marks tasks as _processing and fires backend
 async function onExecute() {
   const selected = queueRef.value?.getSelectedTasks() ?? []
   if (selected.length === 0) return
@@ -174,13 +170,11 @@ async function onExecute() {
     })
   }
   queueRefreshKey.value++
-  // Fire-and-forget — backend runs in background on _processing folders
+  // Fire agent execution — backend spawns hermes -z per _processing task
   fetch('/api/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
-  }).then(() => {
-    setTimeout(() => queueRefreshKey.value++, 3000)
   })
 }
 

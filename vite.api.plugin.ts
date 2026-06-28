@@ -1,7 +1,7 @@
 import type { Plugin } from 'vite'
 import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync, rmSync, statSync } from 'fs'
 import { resolve, relative, sep, basename, dirname } from 'path'
-import { execFileSync } from 'child_process'
+import { spawn } from 'child_process'
 
 // ── Shared config ─────────────────────────────────────────
 import {
@@ -11,6 +11,9 @@ import {
   resolveActionCommand,
   readPrompt,
 } from './src/utils/config'
+
+// ── Running tasks tracking ────────────────────────────────
+const runningTasks = new Set<string>()
 
 export interface FileEntry {
   name: string
@@ -92,8 +95,8 @@ function readFilePath(filePath: string): string | null {
 
 // ──────────────────────────────────────────
 // Task folder format: .hinge/<ts>_<status>/
-//   - input.md  — the markdown content
-//   - attach/   — attached files
+//   - chat.md  — the conversation (user + agent messages)
+//   - attach/  — attached files
 // ──────────────────────────────────────────
 
 function getQueueDir(): string {
@@ -104,8 +107,8 @@ function getTaskFolder(name: string): string {
   return resolve(getQueueDir(), name)
 }
 
-function getInputMdPath(name: string): string {
-  return resolve(getTaskFolder(name), 'input.md')
+function getChatMdPath(name: string): string {
+  return resolve(getTaskFolder(name), 'chat.md')
 }
 
 function getAttachDir(name: string): string {
@@ -129,7 +132,7 @@ function appendToQueue(content: string): string {
 
   mkdirSync(folderPath, { recursive: true })
 
-  const filePath = resolve(folderPath, 'input.md')
+  const filePath = resolve(folderPath, 'chat.md')
   writeFileSync(filePath, content || '', 'utf-8')
   return folderName
 }
@@ -149,10 +152,10 @@ function listQueue(): QueueItem[] {
     if (!name.includes('_wait') && !name.includes('_done') && !name.includes('_processing')) continue
 
     const status = getTaskStatus(name)
-    const inputMdPath = getInputMdPath(name)
+    const chatMdPath = getChatMdPath(name)
 
-    if (!existsSync(inputMdPath)) continue
-    const raw = readFileSync(inputMdPath, 'utf-8')
+    if (!existsSync(chatMdPath)) continue
+    const raw = readFileSync(chatMdPath, 'utf-8')
     // Strip system prompt prefix if present
     const taskMarker = '<!-- task -->'
     const taskIdx = raw.indexOf(taskMarker)
@@ -221,7 +224,7 @@ function deleteQueueItem(name: string): boolean {
 }
 
 function updateQueueItemNote(name: string, newContent: string): boolean {
-  const mdPath = getInputMdPath(name)
+  const mdPath = getChatMdPath(name)
   if (!existsSync(mdPath)) return false
   writeFileSync(mdPath, newContent, 'utf-8')
   return true
@@ -593,20 +596,9 @@ for seg in segments:
       // ─── Status API (lightweight polling) ──
       server.middlewares.use('/api/status', (req, res) => {
         if (req.method !== 'GET') { res.statusCode = 405; res.end('GET only'); return }
-        const queueDir = getQueueDir()
-        let running = false
-        const processing: string[] = []
-        if (existsSync(queueDir)) {
-          const entries = readdirSync(queueDir, { withFileTypes: true })
-          for (const e of entries) {
-            if (e.isDirectory() && e.name.endsWith('_processing')) {
-              running = true
-              processing.push(e.name)
-            }
-          }
-        }
+        const processing = Array.from(runningTasks)
         res.setHeader('Content-Type', 'application/json')
-        res.end(JSON.stringify({ running, processing }))
+        res.end(JSON.stringify({ running: processing.length > 0, processing }))
       })
 
       // ─── Config API ───────────────────────
@@ -680,30 +672,43 @@ for seg in segments:
         const url = new URL(req.url ?? '', `http://${req.headers.host}`)
         const file = url.searchParams.get('file')
         if (!file) { res.statusCode = 400; res.end('missing file'); return }
-        const outputPath = resolve(getTaskFolder(file), 'output.md')
-        if (!existsSync(outputPath)) {
+        // Output is part of chat.md now — return full chat content
+        const chatPath = resolve(getTaskFolder(file), 'chat.md')
+        if (!existsSync(chatPath)) {
           res.statusCode = 404
           res.end('')
           return
         }
-        const content = readFileSync(outputPath, 'utf-8')
+        const content = readFileSync(chatPath, 'utf-8')
         res.setHeader('Content-Type', 'text/plain; charset=utf-8')
         res.end(content)
       })
 
       // ─── Execute agent ────────────────────
-      // POST /api/execute — non-blocking. Just marks tasks as ready for cron.
-      // The cron job handles actual agent execution.
+      // POST /api/execute — spawns hermes -z for each _processing task.
+      // Agent output is appended to chat.md, folder renamed back to _wait.
       server.middlewares.use('/api/execute', (req, res) => {
         if (req.method !== 'POST') { res.statusCode = 405; res.end(JSON.stringify({ error: 'POST only' })); return }
         let body = ''
         req.on('data', (chunk: string) => { body += chunk })
         req.on('end', () => {
           try {
-            // Frontend already renamed tasks to _processing
-            // Nothing else needed — cron picks them up
+            const queueDir = getQueueDir()
+            if (!existsSync(queueDir)) {
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true, spawned: 0 }))
+              return
+            }
+            const entries = readdirSync(queueDir, { withFileTypes: true })
+            let spawned = 0
+            for (const e of entries) {
+              if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
+              if (runningTasks.has(e.name)) continue // already running
+              spawned++
+              runTask(e.name)
+            }
             res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({ ok: true, status: 'delegated' }))
+            res.end(JSON.stringify({ ok: true, spawned }))
           } catch (e: any) {
             res.statusCode = 500
             res.setHeader('Content-Type', 'application/json')
@@ -715,25 +720,67 @@ for seg in segments:
   }
 }
 
-// ─── Buffer helpers ───────────────────────
-function splitBuffer(buf: Buffer, delimiter: Buffer): Buffer[] {
-  const parts: Buffer[] = []
-  let start = 0
-  let idx = buf.indexOf(delimiter, start)
-  while (idx !== -1) {
-    parts.push(buf.slice(start, idx))
-    start = idx + delimiter.length
-    idx = buf.indexOf(delimiter, start)
-  }
-  parts.push(buf.slice(start))
-  return parts
-}
-
-function startsWithBuffer(buf: Buffer, prefix: Buffer): boolean {
-  if (buf.length < prefix.length) return false
-  return buf.slice(0, prefix.length).equals(prefix)
-}
-
 // ─── Background task execution ────────────
-// No longer spawns agent — cron job handles execution.
-// runTasks intentionally removed.
+// Runs hermes -z with chat.md content, appends response to chat.md,
+// renames folder back to _wait.
+function runTask(folderName: string) {
+  runningTasks.add(folderName)
+
+  const folderPath = resolve(getQueueDir(), folderName)
+  const chatPath = resolve(folderPath, 'chat.md')
+
+  if (!existsSync(chatPath)) {
+    runningTasks.delete(folderName)
+    try { renameSync(folderPath, resolve(getQueueDir(), folderName.replace('_processing', '_wait'))) } catch {}
+    return
+  }
+
+  const content = readFileSync(chatPath, 'utf-8')
+  const timeout = 300_000 // 5 min
+
+  try {
+    const child = spawn('hermes', ['-z', content], {
+      shell: false,
+      cwd: process.cwd(),
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+
+    // Timeout killer
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGTERM') } catch {}
+    }, timeout)
+
+    child.on('close', (code) => {
+      clearTimeout(killTimer)
+      runningTasks.delete(folderName)
+
+      // Append agent response to chat.md
+      const agentResponse = stdout || stderr || '(no output)'
+      const appendix = `\n\n---\n**Assistant:**\n${agentResponse.trim()}\n`
+      try {
+        const existing = readFileSync(chatPath, 'utf-8')
+        writeFileSync(chatPath, existing + appendix, 'utf-8')
+      } catch { /* chat.md vanished */ }
+
+      // Rename back to _wait
+      try {
+        const waitName = folderName.replace('_processing', '_wait')
+        renameSync(folderPath, resolve(getQueueDir(), waitName))
+      } catch { /* folder vanished */ }
+    })
+
+    child.on('error', () => {
+      clearTimeout(killTimer)
+      runningTasks.delete(folderName)
+    })
+  } catch {
+    runningTasks.delete(folderName)
+  }
+}

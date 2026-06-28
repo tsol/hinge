@@ -33,14 +33,10 @@ const expanded = ref<string | null>(null)
 // Per-item: editing state
 const editingContent = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
-// Per-item: agent output
-const outputs = ref<Record<string, string>>({})
-const outputsLoading = ref<Record<string, boolean>>({})
 // Per-item: selection for execution (wait tasks only, default checked)
 const selected = ref<Record<string, boolean>>({})
-
-// Processing output polling
-const outputPollTimers = ref<Record<string, ReturnType<typeof setInterval>>>({})
+// Processing flags per item
+const processingTask = ref<Record<string, boolean>>({})
 // Auto-refresh timer
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 
@@ -51,7 +47,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopAutoRefresh()
-  stopAllOutputPolls()
 })
 
 watch(() => props.refreshKey, () => {
@@ -95,13 +90,14 @@ async function refreshItems() {
         ;(item as any).content = editingContent.value[item.name]
       }
     }
-    // Stop polling for tasks that transitioned from processing to done
-    for (const name in outputPollTimers.value) {
-      const stillProcessing = fresh.some(i => i.name === name && i.status === 'processing')
-      if (!stillProcessing) stopOutputPoll(name)
-    }
     items.value = fresh
     initSelected(fresh)
+    // Update processing flags: any task still _processing = agent running
+    const next: Record<string, boolean> = {}
+    for (const item of fresh) {
+      if (item.status === 'processing') next[item.name] = true
+    }
+    processingTask.value = next
   } catch { /* silent */ }
 }
 
@@ -184,47 +180,11 @@ function timeLabel(name: string) {
   return `${datePart} ${time}`
 }
 
-// ── Output polling for processing tasks ──────
-function stopOutputPoll(name: string) {
-  if (outputPollTimers.value[name]) {
-    clearInterval(outputPollTimers.value[name])
-    delete outputPollTimers.value[name]
-  }
-}
-
-function stopAllOutputPolls() {
-  for (const name in outputPollTimers.value) {
-    clearInterval(outputPollTimers.value[name])
-  }
-  outputPollTimers.value = {}
-}
-
-function startOutputPoll(name: string) {
-  stopOutputPoll(name)
-  // Fetch output immediately once, then poll
-  fetchOutput(name)
-  outputPollTimers.value[name] = setInterval(() => fetchOutput(name), 1000)
-}
-
-async function fetchOutput(name: string) {
-  try {
-    const res = await fetch(`/api/queue/output?file=${encodeURIComponent(name)}`)
-    if (!res.ok) {
-      // 404 means no output yet — that's fine
-      return
-    }
-    const text = await res.text()
-    if (text !== outputs.value[name]) {
-      outputs.value = { ...outputs.value, [name]: text }
-    }
-  } catch { /* ignore */ }
-}
-
 // ── Auto-refresh (every 2s while processing items exist) ──
 function startAutoRefresh() {
   autoRefreshTimer = setInterval(() => {
-    // Only refresh if there are processing items (silent, no flicker)
-    if (items.value.some(i => i.status === 'processing')) {
+    // Only refresh if there are processing tasks (silent, no flicker)
+    if (Object.keys(processingTask.value).length > 0) {
       refreshItems()
     }
   }, 2000)
@@ -241,37 +201,31 @@ function stopAutoRefresh() {
 async function expandItem(name: string) {
   if (expanded.value === name) {
     expanded.value = null
-    // Stop output polling if it was a processing task
-    stopOutputPoll(name)
     return
   }
   const prev = expanded.value
   expanded.value = name
-  // Stop previous poll if any
-  if (prev) stopOutputPoll(prev)
 
   const item = items.value.find(i => i.name === name)
   if (!item) return
-  // Initialize editor with the current markdown content
+  // Initialize editor with the full chat content
   if (!(name in editingContent.value)) {
     editingContent.value = { ...editingContent.value, [name]: item.content }
   }
+}
 
-  if (item.status === 'processing') {
-    // Start polling output for live view
-    startOutputPoll(name)
-  } else if (item.status === 'done' && !(name in outputs.value)) {
-    // Fetch completed output once
-    outputsLoading.value = { ...outputsLoading.value, [name]: true }
-    try {
-      const res = await fetch(`/api/queue/output?file=${encodeURIComponent(name)}`)
-      if (res.ok) {
-        const text = await res.text()
-        outputs.value = { ...outputs.value, [name]: text }
-      }
-    } catch { /* ignore */ }
-    outputsLoading.value = { ...outputsLoading.value, [name]: false }
-  }
+/** Execute a single task — marks as _processing, POSTs /api/execute */
+async function executeSingle(name: string) {
+  if (processingTask.value[name]) return // already running
+  // Mark as processing
+  await fetch('/api/queue', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name, status: 'processing' }),
+  })
+  // Fire agent
+  await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  refreshItems()
 }
 
 async function saveFile(name: string) {
@@ -338,26 +292,10 @@ async function saveFile(name: string) {
             spellcheck="false"
           ></textarea>
 
-          <!-- Output section (shown for both done and processing) -->
-          <div class="qr-card__output">
-            <div class="qr-card__output-header">{{ item.status === 'processing' ? '🔴 Live Output' : 'Agent Output' }}</div>
-            <div
-              v-if="item.status === 'processing' && !outputs[item.name]"
-              class="qr-card__output-loading"
-            >
-              <span class="qr-card__output-spinner"></span>
-              Waiting for output…
-            </div>
-            <pre
-              v-else-if="outputs[item.name]"
-              class="qr-card__output-text"
-              :class="{ 'qr-card__output-text--live': item.status === 'processing' }"
-            >{{ outputs[item.name] }}</pre>
-            <p v-else-if="item.status !== 'processing'" class="qr-card__output-empty">(no output)</p>
-          </div>
+          <!-- Chat is shown in the textarea above — no separate output section -->
 
           <!-- Actions row -->
-          <div v-if="item.status === 'processing'" class="qr-card__processing-bar">
+          <div v-if="processingTask[item.name]" class="qr-card__processing-bar">
             <span class="qr-card__processing-text">🔄 Processing…</span>
           </div>
           <div v-else class="qr-card__save-row">
@@ -368,6 +306,10 @@ async function saveFile(name: string) {
             </select>
             <HingeAttach :folder="item.name" />
             <span class="qr-card__save-spacer"></span>
+            <button
+              class="qr-btn qr-btn--exec"
+              @click.stop="executeSingle(item.name)"
+            >▶ Run Agent</button>
             <button
               class="qr-btn qr-btn--save"
               :disabled="saving[item.name]"

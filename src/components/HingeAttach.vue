@@ -107,6 +107,7 @@ function closeDropdown() {
     </button>
 
     <Teleport to="body">
+      <div v-if="open" class="attach-backdrop" @click="closeDropdown"></div>
       <div v-if="open" class="attach-dropdown" :style="dropdownStyle">
         <div class="attach-dropdown__header">Attachments</div>
 
@@ -197,6 +198,13 @@ function closeDropdown() {
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 12px;
   color: #e0e0e0;
+}
+
+.attach-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: transparent;
 }
 .attach-dropdown::-webkit-scrollbar {
   width: 5px;

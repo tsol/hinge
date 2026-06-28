@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import type { HingeTarget } from '../types/target'
+import type { TaskModel } from '../composables/useTaskModel'
 import { useFileTree } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
-import HingeAttention from './HingeAttention.vue'
+import { getElementForComponent, refreshHighlights } from '../composables/useElementHighlights'
 import HingeTabQueue from './HingeTabQueue.vue'
 import HingeAttach from './HingeAttach.vue'
 import hljs from 'highlight.js/lib/core'
@@ -33,6 +34,7 @@ hljs.registerLanguage('bash', bash)
 const props = defineProps<{
   target: HingeTarget
   modelValue: string
+  model: TaskModel
 }>()
 
 const emit = defineEmits<{
@@ -43,11 +45,23 @@ const emit = defineEmits<{
 
 const { selection, fromFile } = useSelectionStore()
 
-const activeTab = ref<'input' | 'files' | 'source'>('input')
 const note = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
 })
+
+const activeTab = ref<'input' | 'files' | 'source'>('input')
+
+const fileMentioned = computed(() => {
+  const path = selection.filePath
+  return !!path && props.model.hasFile(path)
+})
+
+function mentionFile() {
+  const path = selection.filePath
+  if (!path || fileMentioned.value) return
+  props.model.upsertFile(path)
+}
 
 const fileTree = useFileTree()
 const fileSrc = useFileSource()
@@ -103,7 +117,7 @@ function onAdd() {
     fetch('/api/queue', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: editingFile.value, note: note.value }),
+      body: JSON.stringify({ file: editingFile.value, content: note.value }),
     }).then(() => {
       editingFile.value = ''
       editingNoteRef.value = ''
@@ -116,10 +130,10 @@ function onAdd() {
   }
 }
 
-function onEditTask(item: { name: string; note: string }) {
+function onEditTask(item: { name: string; content: string }) {
   editingFile.value = item.name
-  editingNoteRef.value = item.note
-  note.value = item.note
+  editingNoteRef.value = item.content
+  note.value = item.content
 }
 
 // Load root files on mount when switching to files tab
@@ -278,6 +292,17 @@ watch(() => selection.filePath, (filePath) => {
     fileTree.expandToPath(filePath)
   }
 }, { immediate: true })
+
+// When textarea changes → refresh highlights for all listed components
+watch(() => note.value, () => {
+  for (const s of props.model.components.value) {
+    const el = getElementForComponent(s.value)
+    if (el) {
+      refreshHighlights()
+      return
+    }
+  }
+})
 </script>
 
 <template>
@@ -301,8 +326,6 @@ watch(() => selection.filePath, (filePath) => {
 
         <!-- Tab: Input -->
         <div v-if="activeTab === 'input'" class="tab-content">
-          <HingeAttention :target="target" />
-
           <div class="input-scroll">
             <textarea
               ref="noteTextareaRef"
@@ -434,6 +457,13 @@ watch(() => selection.filePath, (filePath) => {
               @click="toggleSourceEdit"
               :title="sourceEditMode ? 'Просмотр' : 'Редактировать'"
             >{{ sourceEditMode ? '👁' : '✎' }}</button>
+            <button
+              v-if="filePathParts.file"
+              class="source-mention-btn"
+              :class="{ 'source-mention-btn--active': fileMentioned }"
+              @click="mentionFile"
+              title="Вставить путь к файлу в заметку"
+            >@</button>
           </div>
 
           <div v-if="fileSrc.loading.value" class="drawer-body">
@@ -573,6 +603,27 @@ watch(() => selection.filePath, (filePath) => {
 .source-edit-toggle--active:hover {
   background: rgba(88, 166, 255, 0.12);
   color: #58a6ff;
+}
+
+.source-mention-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  line-height: 1;
+  font-weight: 700;
+}
+.source-mention-btn:hover {
+  background: rgba(88, 166, 255, 0.08);
+  color: #58a6ff;
+}
+.source-mention-btn--active {
+  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.15);
 }
 
 .tab-header__dir {

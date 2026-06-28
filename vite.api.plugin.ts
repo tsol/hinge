@@ -10,23 +10,6 @@ export interface FileEntry {
   isSymlink: boolean
 }
 
-export interface QueuePayload {
-  note: string
-  url: string
-  filePath: string
-  component: string
-  dom: string
-  props: Record<string, unknown>
-  elementHtml?: string
-  computedStyles?: Record<string, string>
-  elementRect?: {
-    top: number
-    left: number
-    width: number
-    height: number
-  }
-}
-
 export interface QueueItem {
   name: string
   status: 'wait' | 'done'
@@ -124,7 +107,7 @@ function getTaskStatus(name: string): 'wait' | 'done' {
   return name.endsWith('_done') ? 'done' : 'wait'
 }
 
-function appendToQueue(payload: QueuePayload) {
+function appendToQueue(content: string) {
   const queueDir = getQueueDir()
   if (!existsSync(queueDir)) {
     mkdirSync(queueDir, { recursive: true })
@@ -136,30 +119,7 @@ function appendToQueue(payload: QueuePayload) {
   mkdirSync(folderPath, { recursive: true })
 
   const filePath = resolve(folderPath, 'input.md')
-
-  const title = payload.filePath ? payload.filePath.split('/').pop() || '' : ''
-  const componentName = payload.component || 'untitled'
-
-  const lines: string[] = [
-    `### ${title}`,
-    `**Note:** ${payload.note}`,
-    `**File:** ${payload.filePath || ''}`,
-    `**DOM:** ${payload.dom}`,
-    `**URL:** ${payload.url}`,
-    `**Props:** \`${JSON.stringify(payload.props)}\``,
-  ]
-  if (payload.elementRect) {
-    lines.push(`**Rect:** ${payload.elementRect.width}×${payload.elementRect.height} at ${payload.elementRect.left},${payload.elementRect.top}`)
-  }
-  if (payload.elementHtml) {
-    lines.push('')
-    lines.push('```html')
-    lines.push(payload.elementHtml.slice(0, 2000))
-    lines.push('```')
-  }
-  lines.push('')
-
-  writeFileSync(filePath, lines.join('\n'), 'utf-8')
+  writeFileSync(filePath, content || '', 'utf-8')
 }
 
 function listQueue(): QueueItem[] {
@@ -181,12 +141,28 @@ function listQueue(): QueueItem[] {
 
     if (!existsSync(inputMdPath)) continue
     const content = readFileSync(inputMdPath, 'utf-8')
-    const component = (content.match(/^### (.+)/m)?.[1]) ?? name
-    const note = (content.match(/\*\*Note:\*\* (.+)/)?.[1]) ?? ''
-    const url = (content.match(/\*\*URL:\*\* (.+)/)?.[1]) ?? ''
-    const dom = (content.match(/\*\*DOM:\*\* (.+)/)?.[1]) ?? ''
+    const component = content.match(/^### Component: (.+)/m)?.[1] ?? ''
+    const pageUrl = content.match(/^### Page: (.+)/m)?.[1] ?? ''
+    const filePath = content.match(/^### File: (.+)/m)?.[1] ?? ''
+    const dom = content.match(/^DOM: (.+)/m)?.[1] ?? ''
+    const note = (() => {
+      const sections = content.split(/^### /m)
+      if (sections.length <= 1) return ''
+      const last = sections[sections.length - 1]
+      const afterFields = last.split('\n')
+      // Drop header line and field lines, find note after first blank line
+      let inFields = true
+      const noteLines: string[] = []
+      for (const line of afterFields.slice(1)) {
+        if (inFields && /^[A-Za-z]\w+: /.test(line)) continue
+        if (inFields && line.trim() === '') { inFields = false; continue }
+        inFields = false
+        noteLines.push(line)
+      }
+      return noteLines.join('\n').trim()
+    })()
 
-    items.push({ name, status, content, component, note, url, dom })
+    items.push({ name, status, content, component, note, url: pageUrl, dom })
   }
 
   items.sort((a, b) => b.name.localeCompare(a.name)) // newest first
@@ -228,24 +204,10 @@ function deleteQueueItem(name: string): boolean {
   return true
 }
 
-function updateQueueItemNote(name: string, newNote: string): boolean {
+function updateQueueItemNote(name: string, newContent: string): boolean {
   const mdPath = getInputMdPath(name)
   if (!existsSync(mdPath)) return false
-
-  const content = readFileSync(mdPath, 'utf-8')
-  const updated = content.replace(
-    /^(\*\*Note:\*\* ).*/m,
-    (_, prefix) => `${prefix}${newNote}`
-  )
-  if (updated === content) {
-    const withNote = content.replace(
-      /^(#+ .+)/m,
-      `$1\n**Note:** ${newNote}`
-    )
-    writeFileSync(mdPath, withNote, 'utf-8')
-  } else {
-    writeFileSync(mdPath, updated, 'utf-8')
-  }
+  writeFileSync(mdPath, newContent, 'utf-8')
   return true
 }
 
@@ -392,8 +354,8 @@ for seg in segments:
       // ─── Task queue endpoints ────────────────
       server.middlewares.use('/api/queue', (req, res, next) => {
         // Skip sub-paths (/api/queue/attach, /api/queue/attach-file)
-        // req.url is the portion AFTER '/api/queue', so '/' for exact match
-        if (req.url && req.url !== '/' && req.url.startsWith('/')) return next()
+        const urlPath = req.url?.split('?')[0] ?? ''
+        if (urlPath && urlPath !== '/') return next()
 
         // GET — list queue items
         if (req.method === 'GET') {
@@ -423,8 +385,8 @@ for seg in segments:
           req.on('data', (chunk: string) => { body += chunk })
           req.on('end', () => {
             try {
-              const payload: QueuePayload = JSON.parse(body)
-              appendToQueue(payload)
+              const { content } = JSON.parse(body)
+              appendToQueue(content ?? '')
               res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ ok: true }))
             } catch {
@@ -435,19 +397,19 @@ for seg in segments:
           return
         }
 
-        // PATCH — update note of a queue item
+        // PATCH — update full content of a queue item
         if (req.method === 'PATCH') {
           let body = ''
           req.on('data', (chunk: string) => { body += chunk })
           req.on('end', () => {
             try {
-              const { file, note } = JSON.parse(body)
+              const { file, content } = JSON.parse(body)
               if (!file) {
                 res.statusCode = 400
                 res.end(JSON.stringify({ error: 'missing file' }))
                 return
               }
-              const ok = updateQueueItemNote(file, note ?? '')
+              const ok = updateQueueItemNote(file, content ?? '')
               res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ ok }))
             } catch {

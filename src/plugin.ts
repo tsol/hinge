@@ -15,18 +15,6 @@ interface FileEntry {
   isSymlink: boolean
 }
 
-interface QueuePayload {
-  note: string
-  url: string
-  filePath: string
-  component: string
-  dom: string
-  props: Record<string, unknown>
-  elementHtml?: string
-  computedStyles?: Record<string, string>
-  elementRect?: { top: number; left: number; width: number; height: number }
-}
-
 interface QueueItem {
   name: string
   status: 'wait' | 'done'
@@ -102,32 +90,15 @@ function readFilePath(filePath: string): string | null {
   try { return readFileSync(abs, 'utf-8') } catch { return null }
 }
 
-function appendToQueue(payload: QueuePayload) {
+function appendToQueue(content: string) {
   const queueDir = resolve(process.cwd(), '.hinge')
   if (!existsSync(queueDir)) mkdirSync(queueDir, { recursive: true })
   const ts = new Date().toISOString().replace(/:/g, '-').replace('.', '_')
-  const filePath = resolve(queueDir, `${ts}_wait.md`)
-  const basename = payload.filePath ? payload.filePath.split('/').pop() || '' : ''
-  const title = basename || payload.component || 'untitled'
-  const lines: string[] = [
-    `### ${title}`,
-    `**Note:** ${payload.note}`,
-    `**File:** ${payload.filePath || ''}`,
-    `**DOM:** ${payload.dom}`,
-    `**URL:** ${payload.url}`,
-    `**Props:** \`${JSON.stringify(payload.props)}\``,
-  ]
-  if (payload.elementRect) {
-    lines.push(`**Rect:** ${payload.elementRect.width}×${payload.elementRect.height} at ${payload.elementRect.left},${payload.elementRect.top}`)
-  }
-  if (payload.elementHtml) {
-    lines.push('')
-    lines.push('```html')
-    lines.push(payload.elementHtml.slice(0, 2000))
-    lines.push('```')
-  }
-  lines.push('')
-  writeFileSync(filePath, lines.join('\n'), 'utf-8')
+  const folderName = `${ts}_wait`
+  const folderPath = resolve(queueDir, folderName)
+  mkdirSync(folderPath, { recursive: true })
+  const filePath = resolve(folderPath, 'input.md')
+  writeFileSync(filePath, content || '', 'utf-8')
 }
 
 function listQueue(): QueueItem[] {
@@ -283,8 +254,8 @@ for seg in segments:
           // POST — create
           if (req.method === 'POST') {
             try {
-              const payload: QueuePayload = JSON.parse(buf.toString())
-              appendToQueue(payload)
+              const { content } = JSON.parse(buf.toString())
+              appendToQueue(content ?? '')
               res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true }))
             } catch { res.statusCode = 400; res.end(JSON.stringify({ error: 'invalid payload' })) }
             return

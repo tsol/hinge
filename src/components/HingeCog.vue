@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { COG_SIZE } from '../constants'
+import type { TaskModel } from '../composables/useTaskModel'
 
 const props = defineProps<{
   open: boolean
@@ -9,9 +10,10 @@ const props = defineProps<{
   positionY: number
   layerActive: boolean
   candidateLabels: string[]
-  candidateIndex: number
+  candidates: Element[]
+  model: TaskModel
+  selectedElement: Element | null
   collapsed: boolean
-  collapsedLabel: string
 }>()
 
 const emit = defineEmits<{
@@ -20,7 +22,7 @@ const emit = defineEmits<{
   pointerup: [event: PointerEvent]
   pointercancel: [event: PointerEvent]
   togglayer: []
-  select: [index: number]
+  'toggle-component': [name: string, el: Element | null]
 }>()
 
 const wrapStyle = computed(() => ({
@@ -29,13 +31,30 @@ const wrapStyle = computed(() => ({
 }))
 
 function onGearDblClick(_e: MouseEvent) {
-  console.log('[HingeCog] double-click → toggle layer')
   emit('togglayer')
 }
 
-function onItemClick(index: number) {
-  emit('select', index)
+function onItemClick(label: string, el: Element | null) {
+  const comp = label.split(' · ')[0].trim()
+  emit('toggle-component', comp, el)
 }
+
+function isActive(label: string): boolean {
+  const comp = label.split(' · ')[0].trim()
+  return props.model.hasComponent(comp)
+}
+
+/** Items to display — filtered when collapsed */
+const displayItems = computed(() => {
+  return props.candidateLabels
+    .map((label, i) => ({
+      label,
+      el: props.candidates[i] ?? null,
+      active: isActive(label),
+      compName: label.split(' · ')[0].trim(),
+    }))
+    .filter(item => !props.collapsed || item.active)
+})
 
 const ITEM_EST = 22
 const GAP = 4
@@ -45,7 +64,7 @@ const listPos = computed(() => {
   const vh = window.visualViewport?.height ?? window.innerHeight
   const cx = props.positionX
   const cy = props.positionY
-  const n = props.collapsed ? 1 : props.candidateLabels.length
+  const n = displayItems.value.length
   if (n === 0) return {}
 
   const estW = 220
@@ -113,31 +132,23 @@ const listPos = computed(() => {
         ⚙️
       </div>
       <div
-        v-if="candidateLabels.length > 0"
+        v-if="displayItems.length > 0"
         class="cog-list"
         :class="{ 'cog-list--collapsed': collapsed }"
         :style="listPos"
       >
-        <!-- Collapsed: show only active item -->
         <div
-          v-if="collapsed"
-          class="cog-list__item cog-list__item--active"
-          @click="onItemClick(candidateIndex)"
+          v-for="(item, i) in displayItems"
+          :key="i"
+          class="cog-list__item"
+          :class="{
+            'cog-list__item--active': item.active,
+            'cog-list__item--inactive': !item.active,
+          }"
+          @click="onItemClick(item.label, item.el)"
         >
-          {{ collapsedLabel }}
+          {{ collapsed ? item.compName : item.label }}
         </div>
-        <!-- Full list -->
-        <template v-else>
-          <div
-            v-for="(label, i) in candidateLabels"
-            :key="i"
-            class="cog-list__item"
-            :class="{ 'cog-list__item--active': i === candidateIndex }"
-            @click="onItemClick(i)"
-          >
-            {{ label }}
-          </div>
-        </template>
       </div>
     </div>
   </Teleport>
@@ -204,29 +215,35 @@ const listPos = computed(() => {
 
 .cog-list__item {
   padding: 3px 10px !important;
-  background: rgb(23, 60, 140) !important;
-  color: #fff !important;
   font-size: 11px !important;
   font-weight: 500 !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
   white-space: nowrap !important;
   border-radius: 3px !important;
   text-align: center !important;
-  transition: background 0.15s !important;
+  transition: background 0.15s, opacity 0.15s !important;
   cursor: pointer !important;
   pointer-events: auto !important;
 }
 
-.cog-list__item:hover {
+.cog-list__item--inactive {
+  background: rgb(23, 60, 140) !important;
+  color: #8b949e !important;
+}
+
+.cog-list__item--inactive:hover {
   background: rgb(35, 80, 170) !important;
+  color: #fff !important;
 }
 
 .cog-list__item--active {
-  background: rgb(0, 100, 220) !important;
-  font-weight: 700 !important;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3) !important;
-  outline: 2px solid #58a6ff !important;
-  outline-offset: -2px !important;
+  background: rgb(0, 80, 160) !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+}
+
+.cog-list__item--active:hover {
+  background: rgb(0, 100, 190) !important;
 }
 
 .cog-list--collapsed .cog-list__item--active {

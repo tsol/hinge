@@ -22,6 +22,10 @@ const props = withDefaults(defineProps<{
   editingFile: '',
 })
 
+const emit = defineEmits<{
+  'edit-task': [item: { name: string; content: string }]
+}>()
+
 const items = ref<QueueItem[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -70,6 +74,29 @@ async function setStatus(name: string, status: string) {
 
 function statusIcon(status: string) {
   return status === 'done' ? '✅' : '⏳'
+}
+
+/** Extract header title: first ### Component: or ### File: value */
+function headerTitle(content: string): string {
+  const comp = content.match(/^### Component: (.+)/m)
+  if (comp) return comp[1]
+  const file = content.match(/^### File: (.+)/m)
+  if (file) return file[1]
+  const page = content.match(/^### Page: (.+)/m)
+  if (page) return page[1]
+  return 'untitled'
+}
+
+/** Extract first 200 chars of meaningful text from all sections */
+function headerSubtitle(content: string): string {
+  // Strip all ### lines and field lines
+  const clean = content
+    .replace(/^### .+/gm, '')
+    .replace(/^[A-Za-z]\w+: .+/gm, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .trim()
+  if (!clean) return ''
+  return clean.slice(0, 200).replace(/\s+/g, ' ').trim()
 }
 
 function timeLabel(name: string) {
@@ -129,7 +156,10 @@ async function saveFile(name: string) {
       >
         <div class="qr-card__header" @click="expandItem(item.name)">
           <span class="qr-card__icon">{{ statusIcon(item.status) }}</span>
-          <span class="qr-card__comp">{{ item.component }}</span>
+          <div class="qr-card__text">
+            <span class="qr-card__title">{{ headerTitle(item.content) }}</span>
+            <span v-if="headerSubtitle(item.content)" class="qr-card__subtitle">{{ headerSubtitle(item.content) }}</span>
+          </div>
           <span class="qr-card__time">{{ timeLabel(item.name) }}</span>
           <span class="qr-card__chevron">{{ expanded === item.name ? '▲' : '▼' }}</span>
         </div>
@@ -148,6 +178,7 @@ async function saveFile(name: string) {
               <option value="done">✅ Done</option>
             </select>
             <HingeAttach :folder="item.name" />
+            <button class="qr-btn qr-btn--edit-task" @click.stop="emit('edit-task', { name: item.name, content: item.content })" title="Edit">✎</button>
             <span class="qr-card__save-spacer"></span>
             <button
               class="qr-btn qr-btn--save"
@@ -243,14 +274,28 @@ async function saveFile(name: string) {
   width: 18px;
   text-align: center;
 }
-.qr-card__comp {
+.qr-card__text {
   flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.qr-card__title {
   font-size: 12px;
   font-weight: 600;
   color: #c9d1d9;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.qr-card__subtitle {
+  font-size: 10px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
 }
 .qr-card__time {
   font-size: 10px;
@@ -332,4 +377,5 @@ async function saveFile(name: string) {
 }
 .qr-btn:hover { opacity: 0.8; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
+.qr-btn--edit-task { background: transparent; color: #58a6ff; border: 1px solid #58a6ff; font-size: 12px; padding: 4px 8px; }
 </style>

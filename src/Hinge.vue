@@ -13,21 +13,23 @@
         :position-y="position.y"
         :layer-active="gearLayerActive"
         :candidate-labels="candidateLabels"
-        :candidate-index="candidateIndex"
+        :candidates="candidates"
+        :model="model"
+        :selected-element="selectedElement"
         :collapsed="collapsed"
-        :collapsed-label="collapsedLabel"
+        @toggle-component="onToggleComponent"
         @pointerdown="handleGearPointerDown"
         @pointermove="onCogPointerMove"
         @pointerup="onCogPointerUp"
         @pointercancel="onCogPointerUp"
         @togglayer="onToggleLayer"
-        @select="onSelectCandidate"
       />
 
       <HingePanel
         v-if="isOpen"
         v-model="note"
         :target="target"
+        :model="model"
         @send="handleSend"
         @close="isOpen = false"
       />
@@ -37,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import './host'
 import HingeMenuToggle from './components/HingeMenuToggle.vue'
 import HingeCog from './components/HingeCog.vue'
@@ -46,7 +48,11 @@ import { useCogDrag } from './composables/useCogDrag'
 import { useCogPosition } from './composables/useCogPosition'
 import { useQueueSubmit } from './composables/useQueueSubmit'
 import { useTargetComponent } from './composables/useTargetComponent'
-import { useSelectionStore } from './composables/useSelectionStore'
+import { useTaskModel } from './composables/useTaskModel'
+import {
+  toggleComponentHighlight,
+  refreshHighlights,
+} from './composables/useElementHighlights'
 
 const isOpen = ref(false)
 const gearLayerActive = ref(false)
@@ -63,21 +69,34 @@ const {
   position,
   clampPosition,
 })
-const { target, selectedElement, candidateLabels, candidateIndex, selectCandidate, refreshOnUserAction } = useTargetComponent(position)
 
-const collapsedLabel = computed(() => {
-  const t = target.value
-  return t.component || t.dom || 'unknown'
-})
+const { target, selectedElement, candidateLabels, candidates } = useTargetComponent(position)
 
-const { note, sendNote } = useQueueSubmit({
-  getTarget: () => target.value,
-  getElement: () => null,
-})
+const { note, sendNote } = useQueueSubmit()
+const model = useTaskModel(note)
 
 function handleGearPointerDown(e: PointerEvent) {
-  refreshOnUserAction()
+  if (candidates.value.length === 0) {
+    // Force refresh candidates on gear click
+    useTargetComponent(position)
+  }
   onCogPointerDown(e)
+}
+
+/**
+ * Toggle a component from the gear dropdown.
+ * Adds/removes from the task model + manages DOM highlight.
+ */
+function onToggleComponent(compName: string, domEl: Element | null) {
+  const inModel = model.hasComponent(compName)
+  if (inModel) {
+    model.removeComponent(compName)
+  } else {
+    model.toggleComponent(compName, { DOM: compName })
+  }
+  if (domEl) {
+    toggleComponentHighlight(compName, domEl)
+  }
 }
 
 function startCollapseTimer() {
@@ -101,7 +120,6 @@ onUnmounted(() => {
   if (collapseTimer) clearTimeout(collapseTimer)
 })
 
-// When position changes (user moves gear) → expand + reset timer
 watch(
   () => [position.x, position.y],
   () => resetCollapse(),
@@ -111,26 +129,12 @@ function onToggleLayer() {
   gearLayerActive.value = !gearLayerActive.value
 }
 
-function onSelectCandidate(index: number) {
-  selectCandidate(index)
-  resetCollapse()
-}
-
-// Sync gear selection → unified store
-const { fromGear } = useSelectionStore()
-
-watch(
-  () => target.value.component,
-  async (comp) => {
-    if (!comp) return
-    const t = target.value
-    await fromGear(comp, t.dom, '', t.props)
-  },
-  { immediate: true },
-)
+watch(() => model.components.value.length, () => {
+  refreshHighlights()
+})
 
 async function handleSend(onSuccess?: () => void) {
-  await sendNote(onSuccess)
+  await sendNote(note.value, onSuccess)
 }
 </script>
 

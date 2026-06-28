@@ -731,7 +731,7 @@ function runTask(folderName: string) {
 
   if (!existsSync(chatPath)) {
     runningTasks.delete(folderName)
-    try { renameSync(folderPath, resolve(getQueueDir(), folderName.replace('_processing', '_wait'))) } catch {}
+    try { renameSync(folderPath, resolve(getQueueDir(), folderName.replace('_processing', '_done'))) } catch {}
     return
   }
 
@@ -769,10 +769,10 @@ function runTask(folderName: string) {
         writeFileSync(chatPath, existing + appendix, 'utf-8')
       } catch { /* chat.md vanished */ }
 
-      // Rename back to _wait
+      // Rename to _done
       try {
-        const waitName = folderName.replace('_processing', '_wait')
-        renameSync(folderPath, resolve(getQueueDir(), waitName))
+        const doneName = folderName.replace('_processing', '_done')
+        renameSync(folderPath, resolve(getQueueDir(), doneName))
       } catch { /* folder vanished */ }
     })
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, onUnmounted } from 'vue'
+import { ref, onMounted, watch, onUnmounted, nextTick } from 'vue'
 import HingeAttach from './HingeAttach.vue'
 
 interface QueueItem {
@@ -52,6 +52,13 @@ onUnmounted(() => {
 watch(() => props.refreshKey, () => {
   refreshItems()
 })
+
+// Auto-scroll chat textarea when content updates for expanded item
+watch(editingContent, (val) => {
+  if (expanded.value && val[expanded.value] !== undefined) {
+    nextTick(() => scrollChatToBottom(expanded.value!))
+  }
+}, { deep: true })
 
 function initSelected(fresh: QueueItem[]) {
   const next: Record<string, boolean> = {}
@@ -212,7 +219,6 @@ async function expandItem(name: string) {
     expanded.value = null
     return
   }
-  const prev = expanded.value
   expanded.value = name
 
   const item = items.value.find(i => i.name === name)
@@ -220,6 +226,19 @@ async function expandItem(name: string) {
   // Initialize editor with the full chat content
   if (!(name in editingContent.value)) {
     editingContent.value = { ...editingContent.value, [name]: item.content }
+  }
+  // Auto-scroll textarea to bottom (latest messages)
+  await nextTick()
+  scrollChatToBottom(name)
+}
+
+/** Scroll the chat textarea to the bottom */
+function scrollChatToBottom(name: string) {
+  const el = document.querySelector<HTMLTextAreaElement>(
+    `[data-chat-id="${name}"]`
+  )
+  if (el) {
+    el.scrollTop = el.scrollHeight
   }
 }
 
@@ -291,6 +310,7 @@ async function saveFile(name: string) {
             class="qr-card__editor"
             :value="editingContent[item.name]"
             @input="editingContent[item.name] = ($event.target as HTMLTextAreaElement).value"
+            :data-chat-id="item.name"
             spellcheck="false"
           ></textarea>
           <textarea
@@ -298,6 +318,7 @@ async function saveFile(name: string) {
             class="qr-card__editor qr-card__editor--locked"
             :value="editingContent[item.name]"
             readonly
+            :data-chat-id="item.name"
             spellcheck="false"
           ></textarea>
 
@@ -316,16 +337,16 @@ async function saveFile(name: string) {
             <HingeAttach :folder="item.name" />
             <span class="qr-card__save-spacer"></span>
             <button
-              class="qr-btn qr-btn--run"
-              @click.stop="executeSingle(item.name)"
-            title="Run Agent">▶</button>
-            <button
               class="qr-btn qr-btn--save"
               :disabled="saving[item.name]"
               @click.stop="saveFile(item.name)"
             >
               {{ saving[item.name] ? 'Saving…' : 'Сохранить' }}
             </button>
+            <button
+              class="qr-btn qr-btn--run"
+              @click.stop="executeSingle(item.name)"
+            title="Run Agent">▶</button>
           </div>
         </div>
       </div>
@@ -547,7 +568,7 @@ async function saveFile(name: string) {
 .qr-btn:hover { opacity: 0.8; }
 .qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
-.qr-btn--run { background: #238636; color: #fff; font-size: 14px; padding: 4px 10px; }
+.qr-btn--run { background: #238636; color: #fff; padding: 5px 12px; }
 
 /* Agent output */
 .qr-card__select {

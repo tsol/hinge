@@ -20,6 +20,11 @@
       :active-label="activeLabel"
     />
 
+    <section class="dev-section">
+      <h2 class="dev-section-title">Неблокирующий тест</h2>
+      <NonBlockBtn />
+    </section>
+
     <Hinge />
   </div>
 </template>
@@ -31,6 +36,7 @@ import DevHeader from './components/DevHeader.vue'
 import DevCardGrid from './components/DevCardGrid.vue'
 import DevList from './components/DevList.vue'
 import DevFooter from './components/DevFooter.vue'
+import NonBlockBtn from '../src/components/NonBlockBtn.vue'
 interface CardItem { title: string; desc: string }
 interface NestedItem { name: string; details: string[] }
 interface NestedData { label: string; items: NestedItem[] }

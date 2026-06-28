@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, onUnmounted } from 'vue'
 import HingeAttach from './HingeAttach.vue'
 
 interface QueueItem {
   name: string
-  status: 'wait' | 'done'
+  status: 'wait' | 'done' | 'processing'
   content: string
   component: string
   note: string
@@ -21,7 +21,6 @@ const props = withDefaults(defineProps<{
   refreshKey: 0,
   editingFile: '',
 })
-
 const emit = defineEmits<{
   'edit-task': [item: { name: string; content: string }]
 }>()
@@ -34,12 +33,77 @@ const expanded = ref<string | null>(null)
 // Per-item: editing state
 const editingContent = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
+// Per-item: agent output
+const outputs = ref<Record<string, string>>({})
+const outputsLoading = ref<Record<string, boolean>>({})
+// Per-item: selection for execution (wait tasks only, default checked)
+const selected = ref<Record<string, boolean>>({})
 
-onMounted(() => loadItems())
+// Processing output polling
+const outputPollTimers = ref<Record<string, ReturnType<typeof setInterval>>>({})
+// Auto-refresh timer
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+onMounted(() => {
+  loadItems()
+  startAutoRefresh()
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
+  stopAllOutputPolls()
+})
 
 watch(() => props.refreshKey, () => {
-  loadItems()
+  refreshItems()
 })
+
+function initSelected(fresh: QueueItem[]) {
+  const next: Record<string, boolean> = {}
+  for (const item of fresh) {
+    // Keep existing selection for known items, default true for wait
+    if (item.name in selected.value) {
+      next[item.name] = selected.value[item.name] && item.status === 'wait'
+    } else {
+      next[item.name] = item.status === 'wait'
+    }
+  }
+  selected.value = next
+}
+
+/** Get names of all selected wait tasks (processing excluded) */
+function getSelectedTasks(): string[] {
+  return items.value
+    .filter(i => i.status === 'wait' && selected.value[i.name])
+    .map(i => i.name)
+}
+
+function toggleSelected(name: string) {
+  selected.value = { ...selected.value, [name]: !selected.value[name] }
+}
+
+defineExpose({ getSelectedTasks })
+
+/** Silent refresh: keeps current loading state, no flicker */
+async function refreshItems() {
+  try {
+    const res = await fetch('/api/queue')
+    if (!res.ok) return
+    const fresh: QueueItem[] = await res.json()
+    for (const item of fresh) {
+      if (item.name in editingContent.value) {
+        ;(item as any).content = editingContent.value[item.name]
+      }
+    }
+    // Stop polling for tasks that transitioned from processing to done
+    for (const name in outputPollTimers.value) {
+      const stillProcessing = fresh.some(i => i.name === name && i.status === 'processing')
+      if (!stillProcessing) stopOutputPoll(name)
+    }
+    items.value = fresh
+    initSelected(fresh)
+  } catch { /* silent */ }
+}
 
 async function loadItems() {
   loading.value = true
@@ -47,7 +111,15 @@ async function loadItems() {
   try {
     const res = await fetch('/api/queue')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    items.value = await res.json()
+    const fresh: QueueItem[] = await res.json()
+    // Preserve unsaved editing content for existing items
+    for (const item of fresh) {
+      if (item.name in editingContent.value) {
+        ;(item as any).content = editingContent.value[item.name]
+      }
+    }
+    items.value = fresh
+    initSelected(fresh)
   } catch (e: any) {
     error.value = e.message || 'Failed to load queue'
   } finally {
@@ -59,7 +131,8 @@ function remove(name: string) {
   fetch(`/api/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
     .then(() => {
       if (expanded.value === name) expanded.value = null
-      loadItems()
+      stopOutputPoll(name)
+      refreshItems()
     })
 }
 
@@ -69,11 +142,13 @@ async function setStatus(name: string, status: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ file: name, status }),
   })
-  loadItems()
+  refreshItems()
 }
 
 function statusIcon(status: string) {
-  return status === 'done' ? '✅' : '⏳'
+  if (status === 'done') return '✅'
+  if (status === 'processing') return '🔴'
+  return '⏳'
 }
 
 /** Extract header title: first ### Component: or ### File: value */
@@ -101,7 +176,7 @@ function headerSubtitle(content: string): string {
 
 function timeLabel(name: string) {
   // Folder name format: 2026-06-27T20-28-43_403Z_wait
-  const stem = name.replace(/(_wait|_done)$/, '')
+  const stem = name.replace(/(_wait|_done|_processing)$/, '')
   const parts = stem.split('_')
   const ts = parts[0] // "2026-06-27T20-28-43"
   const [datePart, timePart] = ts.split('T')
@@ -109,17 +184,93 @@ function timeLabel(name: string) {
   return `${datePart} ${time}`
 }
 
+// ── Output polling for processing tasks ──────
+function stopOutputPoll(name: string) {
+  if (outputPollTimers.value[name]) {
+    clearInterval(outputPollTimers.value[name])
+    delete outputPollTimers.value[name]
+  }
+}
+
+function stopAllOutputPolls() {
+  for (const name in outputPollTimers.value) {
+    clearInterval(outputPollTimers.value[name])
+  }
+  outputPollTimers.value = {}
+}
+
+function startOutputPoll(name: string) {
+  stopOutputPoll(name)
+  // Fetch output immediately once, then poll
+  fetchOutput(name)
+  outputPollTimers.value[name] = setInterval(() => fetchOutput(name), 1000)
+}
+
+async function fetchOutput(name: string) {
+  try {
+    const res = await fetch(`/api/queue/output?file=${encodeURIComponent(name)}`)
+    if (!res.ok) {
+      // 404 means no output yet — that's fine
+      return
+    }
+    const text = await res.text()
+    if (text !== outputs.value[name]) {
+      outputs.value = { ...outputs.value, [name]: text }
+    }
+  } catch { /* ignore */ }
+}
+
+// ── Auto-refresh (every 2s while processing items exist) ──
+function startAutoRefresh() {
+  autoRefreshTimer = setInterval(() => {
+    // Only refresh if there are processing items (silent, no flicker)
+    if (items.value.some(i => i.status === 'processing')) {
+      refreshItems()
+    }
+  }, 2000)
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+}
+
+// ── Expand / Collapse ──
 async function expandItem(name: string) {
   if (expanded.value === name) {
     expanded.value = null
+    // Stop output polling if it was a processing task
+    stopOutputPoll(name)
     return
   }
+  const prev = expanded.value
   expanded.value = name
+  // Stop previous poll if any
+  if (prev) stopOutputPoll(prev)
+
   const item = items.value.find(i => i.name === name)
   if (!item) return
   // Initialize editor with the current markdown content
   if (!(name in editingContent.value)) {
     editingContent.value = { ...editingContent.value, [name]: item.content }
+  }
+
+  if (item.status === 'processing') {
+    // Start polling output for live view
+    startOutputPoll(name)
+  } else if (item.status === 'done' && !(name in outputs.value)) {
+    // Fetch completed output once
+    outputsLoading.value = { ...outputsLoading.value, [name]: true }
+    try {
+      const res = await fetch(`/api/queue/output?file=${encodeURIComponent(name)}`)
+      if (res.ok) {
+        const text = await res.text()
+        outputs.value = { ...outputs.value, [name]: text }
+      }
+    } catch { /* ignore */ }
+    outputsLoading.value = { ...outputsLoading.value, [name]: false }
   }
 }
 
@@ -152,33 +303,70 @@ async function saveFile(name: string) {
         v-for="item in items"
         :key="item.name"
         class="qr-card"
-        :class="{ 'qr-card--done': item.status === 'done', 'qr-card--expanded': expanded === item.name, 'qr-card--editing': props.editingFile === item.name }"
+        :class="{ 'qr-card--done': item.status === 'done', 'qr-card--processing': item.status === 'processing', 'qr-card--expanded': expanded === item.name, 'qr-card--editing': props.editingFile === item.name }"
       >
         <div class="qr-card__header" @click="expandItem(item.name)">
+          <span
+            v-if="item.status === 'wait'"
+            class="qr-card__select"
+            :class="{ 'qr-card__select--on': selected[item.name] }"
+            @click.stop="item.status === 'wait' && toggleSelected(item.name)"
+          >{{ selected[item.name] ? '☑' : '☐' }}</span>
           <span class="qr-card__icon">{{ statusIcon(item.status) }}</span>
           <div class="qr-card__text">
             <span class="qr-card__title">{{ headerTitle(item.content) }}</span>
             <span v-if="headerSubtitle(item.content)" class="qr-card__subtitle">{{ headerSubtitle(item.content) }}</span>
           </div>
           <span class="qr-card__time">{{ timeLabel(item.name) }}</span>
+          <span v-if="item.status === 'processing'" class="qr-card__pulse">●</span>
           <span class="qr-card__chevron">{{ expanded === item.name ? '▲' : '▼' }}</span>
         </div>
 
         <div v-if="expanded === item.name" class="qr-card__body">
           <textarea
+            v-if="item.status !== 'processing'"
             class="qr-card__editor"
             :value="editingContent[item.name]"
             @input="editingContent[item.name] = ($event.target as HTMLTextAreaElement).value"
             spellcheck="false"
           ></textarea>
-          <div class="qr-card__save-row">
+          <textarea
+            v-else
+            class="qr-card__editor qr-card__editor--locked"
+            :value="editingContent[item.name]"
+            readonly
+            spellcheck="false"
+          ></textarea>
+
+          <!-- Output section (shown for both done and processing) -->
+          <div class="qr-card__output">
+            <div class="qr-card__output-header">{{ item.status === 'processing' ? '🔴 Live Output' : 'Agent Output' }}</div>
+            <div
+              v-if="item.status === 'processing' && !outputs[item.name]"
+              class="qr-card__output-loading"
+            >
+              <span class="qr-card__output-spinner"></span>
+              Waiting for output…
+            </div>
+            <pre
+              v-else-if="outputs[item.name]"
+              class="qr-card__output-text"
+              :class="{ 'qr-card__output-text--live': item.status === 'processing' }"
+            >{{ outputs[item.name] }}</pre>
+            <p v-else-if="item.status !== 'processing'" class="qr-card__output-empty">(no output)</p>
+          </div>
+
+          <!-- Actions row -->
+          <div v-if="item.status === 'processing'" class="qr-card__processing-bar">
+            <span class="qr-card__processing-text">🔄 Processing…</span>
+          </div>
+          <div v-else class="qr-card__save-row">
             <button class="qr-btn qr-btn--delete" @click.stop="remove(item.name)" title="Delete">✕</button>
             <select class="qr-btn qr-btn--status-select" :value="item.status" @change.stop="setStatus(item.name, ($event.target as HTMLSelectElement).value)">
               <option value="wait">⏳ Wait</option>
               <option value="done">✅ Done</option>
             </select>
             <HingeAttach :folder="item.name" />
-            <button class="qr-btn qr-btn--edit-task" @click.stop="emit('edit-task', { name: item.name, content: item.content })" title="Edit">✎</button>
             <span class="qr-card__save-spacer"></span>
             <button
               class="qr-btn qr-btn--save"
@@ -247,6 +435,14 @@ async function saveFile(name: string) {
 .qr-card--done {
   opacity: 0.6;
 }
+.qr-card--processing {
+  border-color: #da3633;
+  animation: qr-pulse-border 2s ease-in-out infinite;
+}
+@keyframes qr-pulse-border {
+  0%, 100% { border-color: #da3633; }
+  50% { border-color: #ff6b6b; }
+}
 .qr-card--expanded {
   border-color: #58a6ff;
   opacity: 1;
@@ -273,6 +469,18 @@ async function saveFile(name: string) {
   flex-shrink: 0;
   width: 18px;
   text-align: center;
+}
+.qr-card__pulse {
+  font-size: 10px;
+  color: #da3633;
+  animation: qr-blink 1s ease-in-out infinite;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+@keyframes qr-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
 }
 .qr-card__text {
   flex: 1;
@@ -344,6 +552,16 @@ async function saveFile(name: string) {
   outline: none;
   border-color: #58a6ff;
 }
+.qr-card__editor--locked {
+  opacity: 0.65;
+  color: #888;
+  resize: none;
+  cursor: not-allowed;
+}
+.qr-card__editor--locked:focus {
+  outline: none;
+  border-color: #2a2a4a;
+}
 .qr-card__save-row {
   display: flex;
   justify-content: space-between;
@@ -376,6 +594,100 @@ async function saveFile(name: string) {
   transition: opacity 0.15s;
 }
 .qr-btn:hover { opacity: 0.8; }
+.qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
-.qr-btn--edit-task { background: transparent; color: #58a6ff; border: 1px solid #58a6ff; font-size: 12px; padding: 4px 8px; }
+
+/* Agent output */
+.qr-card__select {
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+  flex-shrink: 0;
+  cursor: pointer;
+  color: #555;
+  transition: color 0.12s;
+  margin-right: 2px;
+}
+.qr-card__select:hover {
+  color: #58a6ff;
+}
+.qr-card__select--on {
+  color: #58a6ff;
+}
+
+/* Agent output */
+.qr-card__output {
+  border-top: 1px solid #1f6feb33;
+  padding-top: 8px;
+}
+.qr-card__output-header {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #58a6ff;
+  margin-bottom: 6px;
+}
+.qr-card__output-text {
+  margin: 0;
+  padding: 8px 10px;
+  background: #0d1117;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c9d1d9;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.qr-card__output-text--live {
+  border-color: #da3633;
+  max-height: 320px;
+}
+.qr-card__output-loading {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qr-card__output-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #da3633;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: qr-spin 0.8s linear infinite;
+}
+@keyframes qr-spin {
+  to { transform: rotate(360deg); }
+}
+.qr-card__output-empty {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+  margin: 0;
+  padding: 6px 0;
+}
+
+.qr-card__processing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(218, 54, 51, 0.08);
+  border-radius: 4px;
+}
+.qr-card__processing-text {
+  font-size: 11px;
+  color: #ff6b6b;
+  font-weight: 600;
+}
 </style>

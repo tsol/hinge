@@ -3,6 +3,15 @@ import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, unlink
 import { resolve, relative, sep, basename, dirname } from 'path'
 import { execFileSync } from 'child_process'
 
+// ── Shared config ─────────────────────────────────────────
+import {
+  loadConfig,
+  saveConfig,
+  getAction,
+  resolveActionCommand,
+  readPrompt,
+} from './src/utils/config'
+
 export interface FileEntry {
   name: string
   path: string
@@ -103,11 +112,13 @@ function getAttachDir(name: string): string {
   return resolve(getTaskFolder(name), 'attach')
 }
 
-function getTaskStatus(name: string): 'wait' | 'done' {
-  return name.endsWith('_done') ? 'done' : 'wait'
+function getTaskStatus(name: string): 'wait' | 'processing' | 'done' {
+  if (name.endsWith('_done')) return 'done'
+  if (name.endsWith('_processing')) return 'processing'
+  return 'wait'
 }
 
-function appendToQueue(content: string) {
+function appendToQueue(content: string): string {
   const queueDir = getQueueDir()
   if (!existsSync(queueDir)) {
     mkdirSync(queueDir, { recursive: true })
@@ -120,6 +131,7 @@ function appendToQueue(content: string) {
 
   const filePath = resolve(folderPath, 'input.md')
   writeFileSync(filePath, content || '', 'utf-8')
+  return folderName
 }
 
 function listQueue(): QueueItem[] {
@@ -134,13 +146,17 @@ function listQueue(): QueueItem[] {
     const name = e.name
     // Skip system dirs and non-task dirs
     if (name.startsWith('.')) continue
-    if (!name.includes('_wait') && !name.includes('_done')) continue
+    if (!name.includes('_wait') && !name.includes('_done') && !name.includes('_processing')) continue
 
     const status = getTaskStatus(name)
     const inputMdPath = getInputMdPath(name)
 
     if (!existsSync(inputMdPath)) continue
-    const content = readFileSync(inputMdPath, 'utf-8')
+    const raw = readFileSync(inputMdPath, 'utf-8')
+    // Strip system prompt prefix if present
+    const taskMarker = '<!-- task -->'
+    const taskIdx = raw.indexOf(taskMarker)
+    const content = taskIdx >= 0 ? raw.slice(taskIdx + taskMarker.length).trim() : raw
     const component = content.match(/^### Component: (.+)/m)?.[1] ?? ''
     const pageUrl = content.match(/^### Page: (.+)/m)?.[1] ?? ''
     const filePath = content.match(/^### File: (.+)/m)?.[1] ?? ''
@@ -162,7 +178,7 @@ function listQueue(): QueueItem[] {
       return noteLines.join('\n').trim()
     })()
 
-    items.push({ name, status, content, component, note, url: pageUrl, dom })
+    items.push({ name, status, content: content || '', component, note, url: pageUrl, dom })
   }
 
   items.sort((a, b) => b.name.localeCompare(a.name)) // newest first
@@ -183,7 +199,7 @@ function toggleQueueItem(name: string): boolean {
 }
 
 function setQueueItemStatus(name: string, status: string): boolean {
-  if (status !== 'wait' && status !== 'done') return false
+  if (status !== 'wait' && status !== 'done' && status !== 'processing') return false
   const targetSuffix = `_${status}`
   if (name.endsWith(targetSuffix)) return true // already that status
   const folderPath = getTaskFolder(name)
@@ -379,16 +395,16 @@ for seg in segments:
           return
         }
 
-        // POST — create a queue item
+        // POST — create a queue item, return its folder name
         if (req.method === 'POST') {
           let body = ''
           req.on('data', (chunk: string) => { body += chunk })
           req.on('end', () => {
             try {
               const { content } = JSON.parse(body)
-              appendToQueue(content ?? '')
+              const name = appendToQueue(content ?? '')
               res.setHeader('Content-Type', 'application/json')
-              res.end(JSON.stringify({ ok: true }))
+              res.end(JSON.stringify({ ok: true, name }))
             } catch {
               res.statusCode = 400
               res.end(JSON.stringify({ error: 'invalid payload' }))
@@ -573,6 +589,128 @@ for seg in segments:
         const data = readFileSync(abs)
         res.end(data)
       })
+
+      // ─── Status API (lightweight polling) ──
+      server.middlewares.use('/api/status', (req, res) => {
+        if (req.method !== 'GET') { res.statusCode = 405; res.end('GET only'); return }
+        const queueDir = getQueueDir()
+        let running = false
+        const processing: string[] = []
+        if (existsSync(queueDir)) {
+          const entries = readdirSync(queueDir, { withFileTypes: true })
+          for (const e of entries) {
+            if (e.isDirectory() && e.name.endsWith('_processing')) {
+              running = true
+              processing.push(e.name)
+            }
+          }
+        }
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ running, processing }))
+      })
+
+      // ─── Config API ───────────────────────
+      server.middlewares.use('/api/config', (req, res) => {
+        if (req.method === 'GET') {
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify(loadConfig()))
+          return
+        }
+        if (req.method === 'POST') {
+          let body = ''
+          req.on('data', (chunk: string) => { body += chunk })
+          req.on('end', () => {
+            try {
+              saveConfig(JSON.parse(body))
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true }))
+            } catch {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: 'invalid config' }))
+            }
+          })
+          return
+        }
+        res.statusCode = 405
+        res.end(JSON.stringify({ error: 'method not allowed' }))
+      })
+
+      // ─── Prompt API ───────────────────────
+      server.middlewares.use('/api/prompt', (req, res) => {
+        // GET — return current prompt (user override or default)
+        if (req.method === 'GET') {
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+          res.end(readPrompt())
+          return
+        }
+        // POST — write user prompt override to .hinge/prompt.md
+        if (req.method === 'POST') {
+          let body = ''
+          req.on('data', (chunk: string) => { body += chunk })
+          req.on('end', () => {
+            try {
+              const { content } = JSON.parse(body)
+              const hingeDir = resolve(process.cwd(), '.hinge')
+              if (!existsSync(hingeDir)) mkdirSync(hingeDir, { recursive: true })
+              writeFileSync(resolve(hingeDir, 'prompt.md'), content, 'utf-8')
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true }))
+            } catch {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: 'invalid payload' }))
+            }
+          })
+          return
+        }
+        // DELETE — remove user override, restore default
+        if (req.method === 'DELETE') {
+          const overridePath = resolve(process.cwd(), '.hinge', 'prompt.md')
+          if (existsSync(overridePath)) unlinkSync(overridePath)
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ ok: true }))
+          return
+        }
+        res.statusCode = 405
+        res.end(JSON.stringify({ error: 'method not allowed' }))
+      })
+
+      // ─── Queue output endpoint ────────────
+      server.middlewares.use('/api/queue/output', (req, res) => {
+        if (req.method !== 'GET') { res.statusCode = 405; res.end('GET only'); return }
+        const url = new URL(req.url ?? '', `http://${req.headers.host}`)
+        const file = url.searchParams.get('file')
+        if (!file) { res.statusCode = 400; res.end('missing file'); return }
+        const outputPath = resolve(getTaskFolder(file), 'output.md')
+        if (!existsSync(outputPath)) {
+          res.statusCode = 404
+          res.end('')
+          return
+        }
+        const content = readFileSync(outputPath, 'utf-8')
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+        res.end(content)
+      })
+
+      // ─── Execute agent ────────────────────
+      // POST /api/execute — non-blocking. Just marks tasks as ready for cron.
+      // The cron job handles actual agent execution.
+      server.middlewares.use('/api/execute', (req, res) => {
+        if (req.method !== 'POST') { res.statusCode = 405; res.end(JSON.stringify({ error: 'POST only' })); return }
+        let body = ''
+        req.on('data', (chunk: string) => { body += chunk })
+        req.on('end', () => {
+          try {
+            // Frontend already renamed tasks to _processing
+            // Nothing else needed — cron picks them up
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ ok: true, status: 'delegated' }))
+          } catch (e: any) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: e.message || e.toString() }))
+          }
+        })
+      })
     },
   }
 }
@@ -595,3 +733,7 @@ function startsWithBuffer(buf: Buffer, prefix: Buffer): boolean {
   if (buf.length < prefix.length) return false
   return buf.slice(0, prefix.length).equals(prefix)
 }
+
+// ─── Background task execution ────────────
+// No longer spawns agent — cron job handles execution.
+// runTasks intentionally removed.

@@ -1,6 +1,6 @@
 export interface Section {
-  type: 'page' | 'component' | 'file'
-  value: string        // URL path | component name | file path
+  type: 'page' | 'component' | 'file' | 'text'
+  value: string        // URL path | component name | file path | raw text (for 'text' type)
   fields: Record<string, string>   // DOM, Props, Styles (raw "Key: Val" lines)
   note: string          // free text after fields until next ###
 }
@@ -12,6 +12,8 @@ const FIELD_RE = /^([A-Za-z]\w+): (.+)$/
  * Parse markdown text into sections.
  * Sections are delimited by ### Page / ### Component / ### File lines.
  * Fields are Key: Value lines immediately after the header (no blank line before).
+ * Text before the first section is stored as a 'text' section at index 0 (preamble).
+ * Text after fields (user free notes) is stored in the section's `note` field.
  */
 export function parseQueueMarkdown(text: string): Section[] {
   const lines = text.split('\n')
@@ -19,6 +21,15 @@ export function parseQueueMarkdown(text: string): Section[] {
   let current: Section | null = null
   let inFields = false
   let noteLines: string[] = []
+  let preambleLines: string[] = []
+
+  function flushPreamble() {
+    const txt = preambleLines.join('\n').trim()
+    if (txt) {
+      sections.push({ type: 'text', value: txt, fields: {}, note: '' })
+    }
+    preambleLines = []
+  }
 
   function flushNote() {
     if (current) {
@@ -30,6 +41,7 @@ export function parseQueueMarkdown(text: string): Section[] {
   for (const line of lines) {
     const sectionMatch = line.match(SECTION_RE)
     if (sectionMatch) {
+      flushPreamble()
       flushNote()
       current = {
         type: sectionMatch[1].toLowerCase() as Section['type'],
@@ -43,8 +55,8 @@ export function parseQueueMarkdown(text: string): Section[] {
     }
 
     if (!current) {
-      // Text before any section — treat as page-level note
-      noteLines.push(line)
+      // Text before any section — save as preamble
+      preambleLines.push(line)
       continue
     }
 
@@ -59,6 +71,7 @@ export function parseQueueMarkdown(text: string): Section[] {
     noteLines.push(line)
   }
 
+  flushPreamble()
   flushNote()
 
   return sections
@@ -66,11 +79,18 @@ export function parseQueueMarkdown(text: string): Section[] {
 
 /**
  * Stringify sections back to markdown.
+ * 'text' type sections output their value as raw free text (no header).
  */
 export function stringifyQueueMarkdown(sections: Section[]): string {
   const blocks: string[] = []
 
   for (const s of sections) {
+    if (s.type === 'text') {
+      // Raw text block — output as-is
+      blocks.push(s.value)
+      continue
+    }
+
     const typeLabel = s.type === 'page' ? 'Page'
       : s.type === 'component' ? 'Component'
       : 'File'
@@ -93,7 +113,8 @@ export function stringifyQueueMarkdown(sections: Section[]): string {
 }
 
 /**
- * Toggle a section — if it exists, remove it; otherwise add it. Returns new array.
+ * Toggle a section — if it exists, remove it (preserving its note as free text);
+ * otherwise add it. Returns new array.
  */
 export function toggleSection(
   sections: Section[],
@@ -103,7 +124,15 @@ export function toggleSection(
 ): Section[] {
   const idx = sections.findIndex(s => s.type === type && s.value === value)
   if (idx >= 0) {
-    return sections.filter((_, i) => i !== idx)
+    // Remove, but preserve note as free text
+    const removed = sections[idx]
+    const note = removed.note?.trim()
+    const filtered = sections.filter((_, i) => i !== idx)
+    if (note) {
+      const textSection: Section = { type: 'text', value: note, fields: {}, note: '' }
+      filtered.splice(Math.min(idx, filtered.length), 0, textSection)
+    }
+    return filtered
   }
   return [...sections, { type, value, fields: fields ?? {}, note: '' }]
 }
@@ -129,9 +158,24 @@ export function upsertSection(
 
 /**
  * Remove a section by type+value.
+ * The section's free-text note is preserved as a 'text' section, so user-written
+ * notes between system fields are never lost.
  */
 export function removeSection(sections: Section[], type: Section['type'], value: string): Section[] {
-  return sections.filter(s => !(s.type === type && s.value === value))
+  const idx = sections.findIndex(s => s.type === type && s.value === value)
+  if (idx < 0) return sections
+
+  const removed = sections[idx]
+  const note = removed.note?.trim()
+  const filtered = sections.filter((_, i) => i !== idx)
+
+  if (note) {
+    // Insert the note as a free-text block at the position where the section was
+    const textSection: Section = { type: 'text', value: note, fields: {}, note: '' }
+    filtered.splice(Math.min(idx, filtered.length), 0, textSection)
+  }
+
+  return filtered
 }
 
 /**

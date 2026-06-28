@@ -53,6 +53,8 @@ import {
   toggleComponentHighlight,
   refreshHighlights,
 } from './composables/useElementHighlights'
+import { resolveVueFromElement } from './utils/vueTarget'
+import { formatPropsInline } from './utils/vueTarget'
 
 const isOpen = ref(false)
 const gearLayerActive = ref(false)
@@ -76,6 +78,7 @@ const { note, sendNote } = useQueueSubmit()
 const model = useTaskModel(note)
 
 function handleGearPointerDown(e: PointerEvent) {
+  resetCollapse()
   if (candidates.value.length === 0) {
     // Force refresh candidates on gear click
     useTargetComponent(position)
@@ -83,19 +86,52 @@ function handleGearPointerDown(e: PointerEvent) {
   onCogPointerDown(e)
 }
 
+/** Extract relevant computed CSS values from an element */
+function getComputedStyles(el: Element): Record<string, string> {
+  if (!(el instanceof HTMLElement)) return {}
+  const cs = getComputedStyle(el)
+  const relevant = [
+    'display', 'position', 'flex-direction', 'align-items', 'justify-content',
+    'gap', 'padding', 'margin', 'font-size', 'font-weight', 'color',
+    'background', 'background-color', 'border-radius', 'border',
+    'width', 'height', 'min-width', 'min-height',
+    'opacity', 'overflow', 'text-align', 'white-space',
+  ]
+  const out: Record<string, string> = {}
+  for (const key of relevant) {
+    const val = cs.getPropertyValue(key)
+    if (val && val !== 'none' && val !== 'auto' && val !== 'normal') {
+      out[key] = val
+    }
+  }
+  return out
+}
+
 /**
  * Toggle a component from the gear dropdown.
+ * Uses the composite label (e.g. "HingePanel · button \"Добавить\"") as the unique key.
  * Adds/removes from the task model + manages DOM highlight.
  */
-function onToggleComponent(compName: string, domEl: Element | null) {
-  const inModel = model.hasComponent(compName)
+function onToggleComponent(compositeKey: string, domEl: Element | null) {
+  resetCollapse()
+  const inModel = model.hasComponent(compositeKey)
   if (inModel) {
-    model.removeComponent(compName)
+    model.removeComponent(compositeKey)
   } else {
-    model.toggleComponent(compName, { DOM: compName })
+    const fields: Record<string, string> = {}
+    // Extract Vue props & computed styles from the element only when gear is NOT active (red)
+    if (domEl && !gearLayerActive.value) {
+      const vue = resolveVueFromElement(domEl)
+      const propsStr = formatPropsInline(vue.props, 6)
+      if (propsStr) fields.Props = propsStr
+      const styles = getComputedStyles(domEl)
+      const styleStr = Object.entries(styles).map(([k, v]) => `${k}=${v}`).join(' ')
+      if (styleStr) fields.Styling = styleStr
+    }
+    model.toggleComponent(compositeKey, fields)
   }
   if (domEl) {
-    toggleComponentHighlight(compName, domEl)
+    toggleComponentHighlight(compositeKey, domEl)
   }
 }
 

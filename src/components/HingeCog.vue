@@ -35,13 +35,11 @@ function onGearDblClick(_e: MouseEvent) {
 }
 
 function onItemClick(label: string, el: Element | null) {
-  const comp = label.split(' · ')[0].trim()
-  emit('toggle-component', comp, el)
+  emit('toggle-component', label, el)
 }
 
 function isActive(label: string): boolean {
-  const comp = label.split(' · ')[0].trim()
-  return props.model.hasComponent(comp)
+  return props.model.hasComponent(label)
 }
 
 /** Items to display — filtered when collapsed */
@@ -232,18 +230,16 @@ const listPos = computed(() => {
 }
 
 .cog-list__item--inactive:hover {
-  background: rgb(35, 80, 170) !important;
-  color: #fff !important;
+  background: rgb(23, 60, 140) !important;
 }
-
 .cog-list__item--active {
-  background: rgb(0, 80, 160) !important;
+  background: rgb(0, 100, 230) !important;
   color: #fff !important;
   font-weight: 600 !important;
 }
 
 .cog-list__item--active:hover {
-  background: rgb(0, 100, 190) !important;
+  background: rgb(0, 100, 230) !important;
 }
 
 .cog-list--collapsed .cog-list__item--active {

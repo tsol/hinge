@@ -9,7 +9,6 @@ export function useQueueSubmit() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     })
-
     note.value = ''
     onSuccess?.()
   }

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import type { HingeTarget } from '../types/target'
 import type { TaskModel } from '../composables/useTaskModel'
 import { useFileTree } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
-import { getElementForComponent, refreshHighlights } from '../composables/useElementHighlights'
+import { getElementForComponent, syncHighlights } from '../composables/useElementHighlights'
 import HingeTabQueue from './HingeTabQueue.vue'
 import HingeAttach from './HingeAttach.vue'
 import hljs from 'highlight.js/lib/core'
@@ -52,15 +52,33 @@ const note = computed({
 
 const activeTab = ref<'input' | 'files' | 'source'>('input')
 
-const fileMentioned = computed(() => {
-  const path = selection.filePath
-  return !!path && props.model.hasFile(path)
-})
+const fileMentioned = ref(false)
+
+watch(
+  () => [selection.filePath, props.model.files.value.map(s => s.value)],
+  ([path, files]) => {
+    fileMentioned.value = !!path && files.includes(path)
+  },
+  { immediate: true },
+)
 
 function mentionFile() {
   const path = selection.filePath
-  if (!path || fileMentioned.value) return
-  props.model.upsertFile(path)
+  if (!path) return
+  if (fileMentioned.value) {
+    props.model.removeFile(path)
+  } else {
+    props.model.upsertFile(path)
+  }
+}
+
+/** Toggle a file path in the task model — used by file tree checkboxes */
+function toggleFileMention(path: string) {
+  if (props.model.hasFile(path)) {
+    props.model.removeFile(path)
+  } else {
+    props.model.upsertFile(path)
+  }
 }
 
 const fileTree = useFileTree()
@@ -68,6 +86,7 @@ const fileSrc = useFileSource()
 const queueRefreshKey = ref(0)
 const editingFile = ref('')
 const editingNoteRef = ref('')
+const queueRef = ref<InstanceType<typeof HingeTabQueue> | null>(null)
 
 // Drawer resizable width
 const STORAGE_KEY = 'hinge-drawer-width'
@@ -82,6 +101,8 @@ onMounted(() => {
     const w = parseInt(saved, 10)
     if (w >= 260 && w <= 800) drawerWidth.value = w
   }
+  // Auto-resize textarea to content
+  setTimeout(autoResizeTextarea, 50)
 })
 
 function startResize(e: PointerEvent) {
@@ -136,6 +157,33 @@ function onEditTask(item: { name: string; content: string }) {
   note.value = item.content
 }
 
+// Execute agent
+const executing = ref(false)
+const execResult = ref('')
+const execError = ref(false)
+
+async function onExecute() {
+  const selected = queueRef.value?.getSelectedTasks() ?? []
+  if (selected.length === 0) return
+  // Optimistically mark selected tasks as processing
+  for (const name of selected) {
+    await fetch('/api/queue', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: name, status: 'processing' }),
+    })
+  }
+  queueRefreshKey.value++
+  // Fire-and-forget — backend runs in background on _processing folders
+  fetch('/api/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }).then(() => {
+    setTimeout(() => queueRefreshKey.value++, 3000)
+  })
+}
+
 // Load root files on mount when switching to files tab
 const tabs = [
   { id: 'input' as const, label: 'Input' },
@@ -147,6 +195,9 @@ function switchTab(tab: typeof activeTab.value) {
   activeTab.value = tab
   if (tab === 'files' && fileTree.root.value.length === 0) {
     fileTree.loadRoot()
+  }
+  if (tab === 'input') {
+    nextTick(autoResizeTextarea)
   }
 }
 
@@ -227,6 +278,7 @@ function startRecording() {
         if (err) throw new Error(err)
         if (text && noteTextareaRef.value) {
           note.value = (note.value ? note.value + '\n' : '') + text
+          autoResizeTextarea()
         }
       } catch { /* silent */ }
       audioChunks = []
@@ -241,6 +293,32 @@ function stopRecording() {
   recording.value = false
   mediaRecorder.stop()
   mediaRecorder = null
+}
+
+/** Auto-resize textarea to fit content, capped at 50% of available height */
+function autoResizeTextarea() {
+  const ta = noteTextareaRef.value
+  if (!ta) return
+  ta.style.height = 'auto'
+  const scroll = ta.scrollHeight
+  // Find the container (.input-scroll) which has flex:1
+  const container = ta.closest('.input-scroll') as HTMLElement | null
+  if (!container) { ta.style.height = scroll + 'px'; return }
+  // Calculate available = container height minus other children (actions, gaps, padding)
+  const actions = container.querySelector('.input-actions') as HTMLElement | null
+  const actionsH = actions ? actions.offsetHeight : 0
+  const gapPx = 14 // gap value from CSS
+  const containerPad = 4 + 14 // padding-top + padding-bottom
+  const available = container.clientHeight - actionsH - containerPad - gapPx
+  const max = Math.max(60, Math.floor(available * 0.5))
+  ta.style.maxHeight = max + 'px'
+  ta.style.height = Math.min(scroll, max) + 'px'
+}
+
+/** Handle textarea input: update model + auto-resize */
+function onNoteInput(e: Event) {
+  note.value = (e.target as HTMLTextAreaElement).value
+  autoResizeTextarea()
 }
 
 // Source edit mode
@@ -293,16 +371,56 @@ watch(() => selection.filePath, (filePath) => {
   }
 }, { immediate: true })
 
-// When textarea changes → refresh highlights for all listed components
+// When textarea changes → sync DOM highlights with current components + auto-resize
 watch(() => note.value, () => {
-  for (const s of props.model.components.value) {
-    const el = getElementForComponent(s.value)
-    if (el) {
-      refreshHighlights()
-      return
-    }
-  }
+  const active = props.model.components.value.map(s => s.value)
+  syncHighlights(active)
+  nextTick(autoResizeTextarea)
 })
+
+// ─── Prompt settings ─────────────────────
+const promptModal = ref(false)
+const promptText = ref('')
+const promptLoading = ref(false)
+const promptSaving = ref(false)
+
+async function loadPrompt() {
+  promptLoading.value = true
+  try {
+    const res = await fetch('/api/prompt')
+    promptText.value = await res.text()
+  } catch {
+    promptText.value = 'Failed to load prompt'
+  }
+  promptLoading.value = false
+}
+
+async function savePrompt() {
+  promptSaving.value = true
+  try {
+    await fetch('/api/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: promptText.value }),
+    })
+    promptModal.value = false
+  } catch { /* ignore */ }
+  promptSaving.value = false
+}
+
+async function resetPrompt() {
+  promptSaving.value = true
+  try {
+    await fetch('/api/prompt', { method: 'DELETE' })
+    await loadPrompt()
+  } catch { /* ignore */ }
+  promptSaving.value = false
+}
+
+function openPromptModal() {
+  loadPrompt()
+  promptModal.value = true
+}
 </script>
 
 <template>
@@ -312,6 +430,7 @@ watch(() => note.value, () => {
       <div ref="drawerRef" class="drawer" :style="{ width: drawerWidth + 'px' }">
         <!-- Tabs -->
         <div class="drawer-tabs">
+          <button class="drawer-settings" @click="openPromptModal" title="System prompt">⚙</button>
           <button
             v-for="t in tabs"
             :key="t.id"
@@ -331,9 +450,8 @@ watch(() => note.value, () => {
               ref="noteTextareaRef"
               class="drawer-textarea"
               :value="note"
-              @input="note = ($event.target as HTMLTextAreaElement).value"
+              @input="onNoteInput"
               placeholder="Заметка / описание..."
-              rows="3"
             ></textarea>
 
             <div class="input-actions">
@@ -365,6 +483,7 @@ watch(() => note.value, () => {
             </div>
 
             <HingeTabQueue
+              ref="queueRef"
               compact
               :refresh-key="queueRefreshKey"
               :editing-file="editingFile"
@@ -372,7 +491,10 @@ watch(() => note.value, () => {
             />
 
             <div class="queue-footer">
-              <button class="drawer-btn drawer-btn--exec">Выполнить</button>
+              <button
+                class="drawer-btn drawer-btn--exec"
+                @click="onExecute"
+              >Выполнить</button>
             </div>
           </div>
         </div>
@@ -390,13 +512,20 @@ watch(() => note.value, () => {
           </div>
 
           <div v-else class="drawer-body drawer-body--scroll">
-            <template v-for="entry in fileTree.root.value" :key="entry.path">
+              <template v-for="entry in fileTree.root.value" :key="entry.path">
               <!-- Root entry -->
               <div
                 class="file-row"
                 :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === entry.path }"
                 @click="entry.isDir ? fileTree.toggleDir(entry.path) : openFile(entry.path)"
               >
+                <span
+                  v-if="!entry.isDir"
+                  class="file-check"
+                  :class="{ 'file-check--on': props.model.hasFile(entry.path) }"
+                  @click.stop="toggleFileMention(entry.path)"
+                >{{ props.model.hasFile(entry.path) ? '☑' : '☐' }}</span>
+                <span v-else class="file-check file-check--spacer"></span>
                 <span v-if="entry.isDir" class="file-toggle">
                   {{ fileTree.isExpanded(entry.path) ? '▼' : '▶' }}
                 </span>
@@ -413,6 +542,13 @@ watch(() => note.value, () => {
                     :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === child.path }"
                     @click="child.isDir ? fileTree.toggleDir(child.path) : openFile(child.path)"
                   >
+                    <span
+                      v-if="!child.isDir"
+                      class="file-check"
+                      :class="{ 'file-check--on': props.model.hasFile(child.path) }"
+                      @click.stop="toggleFileMention(child.path)"
+                    >{{ props.model.hasFile(child.path) ? '☑' : '☐' }}</span>
+                    <span v-else class="file-check file-check--spacer"></span>
                     <span v-if="child.isDir" class="file-toggle">
                       {{ fileTree.isExpanded(child.path) ? '▼' : '▶' }}
                     </span>
@@ -430,6 +566,13 @@ watch(() => note.value, () => {
                       :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === gc.path }"
                       @click="gc.isDir ? fileTree.toggleDir(gc.path) : openFile(gc.path)"
                     >
+                      <span
+                        v-if="!gc.isDir"
+                        class="file-check"
+                        :class="{ 'file-check--on': props.model.hasFile(gc.path) }"
+                        @click.stop="toggleFileMention(gc.path)"
+                      >{{ props.model.hasFile(gc.path) ? '☑' : '☐' }}</span>
+                      <span v-else class="file-check file-check--spacer"></span>
                       <span v-if="gc.isDir" class="file-toggle">
                         {{ fileTree.isExpanded(gc.path) ? '▼' : '▶' }}
                       </span>
@@ -497,6 +640,35 @@ watch(() => note.value, () => {
           :class="{ 'drawer-resize-handle--active': resizing }"
           @pointerdown="startResize"
         ></div>
+      </div>
+
+      <!-- Prompt settings modal -->
+      <div v-if="promptModal" class="prompt-overlay" @click.self="promptModal = false">
+        <div class="prompt-modal">
+          <div class="prompt-modal__header">
+            <span>System Prompt</span>
+            <button class="drawer-close" @click="promptModal = false">✕</button>
+          </div>
+          <div class="prompt-modal__body" v-if="promptLoading">
+            <p class="drawer-muted">Loading…</p>
+          </div>
+          <div class="prompt-modal__body" v-else>
+            <textarea
+              class="prompt-editor"
+              :value="promptText"
+              @input="promptText = ($event.target as HTMLTextAreaElement).value"
+              spellcheck="false"
+            ></textarea>
+          </div>
+          <div class="prompt-modal__footer">
+            <button class="drawer-btn drawer-btn--prompt-reset" @click="resetPrompt" :disabled="promptSaving">
+              {{ promptSaving ? '…' : 'Сброс' }}
+            </button>
+            <button class="drawer-btn drawer-btn--prompt-save" @click="savePrompt" :disabled="promptSaving || promptLoading">
+              {{ promptSaving ? '…' : 'Сохранить' }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -736,6 +908,7 @@ watch(() => note.value, () => {
 
 .drawer-textarea {
   width: 100%;
+  margin-top: 8px;
   padding: 10px;
   border: 1px solid #2a2a4a;
   border-radius: 6px;
@@ -743,9 +916,10 @@ watch(() => note.value, () => {
   color: #e0e0e0;
   font-family: inherit;
   font-size: 13px;
-  resize: vertical;
   min-height: 60px;
   box-sizing: border-box;
+  white-space: pre !important;
+  overflow: auto !important;
 }
 
 .drawer-textarea:focus {
@@ -879,6 +1053,26 @@ watch(() => note.value, () => {
   color: #c9d1d9;
 }
 
+.file-check {
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+  flex-shrink: 0;
+  cursor: pointer;
+  color: #555;
+  transition: color 0.12s;
+}
+.file-check:hover {
+  color: #58a6ff;
+}
+.file-check--on {
+  color: #58a6ff;
+}
+.file-check--spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .file-children {
   /* no extra styling needed */
 }
@@ -977,5 +1171,137 @@ watch(() => note.value, () => {
 .drawer-resize-handle:hover,
 .drawer-resize-handle--active {
   background: rgba(88, 166, 255, 0.3);
+}
+
+/* Execute result banner */
+.exec-result {
+  margin: 8px 14px 14px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #0d2818;
+  border: 1px solid #238636;
+  position: relative;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.exec-result--err {
+  background: #2d0f0f;
+  border-color: #da3633;
+}
+.exec-result__close {
+  position: sticky;
+  top: 0;
+  float: right;
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.exec-result__text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #e0e0e0;
+}
+
+/* Settings gear button */
+.drawer-settings {
+  background: transparent;
+  border: none;
+  color: #666;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 10px 8px;
+  line-height: 1;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.drawer-settings:hover {
+  color: #ccc;
+}
+
+/* Prompt modal overlay */
+.prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200000;
+}
+.prompt-modal {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 10px;
+  width: min(90vw, 600px);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.prompt-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #2a2a4a;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+.prompt-modal__body {
+  flex: 1;
+  overflow: hidden;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+}
+.prompt-editor {
+  width: 100%;
+  flex: 1;
+  min-height: 200px;
+  padding: 10px;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.prompt-editor:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+.prompt-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #2a2a4a;
+}
+.drawer-btn--prompt-save {
+  background: #1f6feb;
+  color: #fff;
+}
+.drawer-btn--prompt-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.drawer-btn--prompt-reset {
+  background: #30363d;
+  color: #ccc;
+}
+.drawer-btn--prompt-reset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

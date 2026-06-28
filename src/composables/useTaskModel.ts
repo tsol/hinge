@@ -66,39 +66,45 @@ export function useTaskModel(note: Ref<string>): TaskModel {
 
   // ── Mutators ──────────────────────────────────────────────
 
+  /** Set note content, ensuring 2 trailing newlines for click space */
+  function setNote(v: string) {
+    const n = v.match(/\n+$/)?.[0]?.length ?? 0
+    note.value = n >= 2 ? v : v + '\n'.repeat(2 - n)
+  }
+
   function toggleComponent(name: string, fields?: Record<string, string>) {
     const updated = toggleSection(parseQueueMarkdown(note.value), 'component', name, fields)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   function upsertComponent(name: string, fields?: Record<string, string>) {
     const updated = upsertSection(parseQueueMarkdown(note.value), 'component', name, fields)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   function removeComponent(name: string) {
     const updated = removeSection(parseQueueMarkdown(note.value), 'component', name)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   function upsertFile(path: string) {
     const updated = upsertSection(parseQueueMarkdown(note.value), 'file', path)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   function removeFile(path: string) {
     const updated = removeSection(parseQueueMarkdown(note.value), 'file', path)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   function togglePage(url: string) {
     const updated = toggleSection(parseQueueMarkdown(note.value), 'page', url)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   function upsertPage(url: string) {
     const updated = upsertSection(parseQueueMarkdown(note.value), 'page', url)
-    note.value = stringifyQueueMarkdown(updated)
+    setNote(stringifyQueueMarkdown(updated))
   }
 
   return {

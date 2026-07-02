@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
-import { hydrateDrafts, saveDraft, clearDraft } from '../composables/useTaskDraft'
+import { hydrateDrafts, clearDraft } from '../composables/useTaskDraft'
+
+type ExecMode = 'execute' | 'stop' | 'delete'
 
 interface QueueItem {
   name: string
@@ -22,10 +24,12 @@ const props = withDefaults(defineProps<{
   compact?: boolean
   refreshKey?: number
   editingFile?: string
+  execMode?: ExecMode
 }>(), {
   compact: false,
   refreshKey: 0,
   editingFile: '',
+  execMode: 'execute',
 })
 const items = ref<QueueItem[]>([])
 const loading = ref(false)
@@ -54,6 +58,13 @@ let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 /** True when at least one task is processing */
 const hasProcessing = computed(() => Object.keys(processingTask.value).length > 0)
+
+/** Returns true if this status should show a checkbox in the current exec mode */
+function modeStatusCheck(status: string): boolean {
+  if (props.execMode === 'stop') return status === 'wait' || status === 'processing'
+  if (props.execMode === 'delete') return status === 'new' || status === 'done'
+  return status === 'new' // execute mode
+}
 
 /** Parse chat content into structured messages */
 function parseMessages(content: string): ChatMessage[] {
@@ -136,19 +147,20 @@ watch(() => props.refreshKey, () => {
 function initSelected(fresh: QueueItem[]) {
   const next: Record<string, boolean> = {}
   for (const item of fresh) {
+    const inRange = modeStatusCheck(item.status)
     if (item.name in selected.value) {
-      next[item.name] = selected.value[item.name] && item.status === 'new'
+      next[item.name] = selected.value[item.name] && inRange
     } else {
-      next[item.name] = item.status === 'new'
+      next[item.name] = inRange
     }
   }
   selected.value = next
 }
 
-/** Get names of all selected new tasks */
+/** Get names of all selected tasks for current mode */
 function getSelectedTasks(): string[] {
   return items.value
-    .filter(i => i.status === 'new' && selected.value[i.name])
+    .filter(i => modeStatusCheck(i.status) && selected.value[i.name])
     .map(i => i.name)
 }
 
@@ -156,7 +168,15 @@ function toggleSelected(name: string) {
   selected.value = { ...selected.value, [name]: !selected.value[name] }
 }
 
-defineExpose({ getSelectedTasks, stopAll })
+/** Number of currently selected tasks (reactive) */
+const selectionCount = computed(() => getSelectedTasks().length)
+
+// Re-init selected when execMode changes
+watch(() => props.execMode, () => {
+  initSelected(items.value)
+})
+
+defineExpose({ getSelectedTasks, stopAll, selectionCount })
 
 /** Silent refresh: keeps current loading state, no flicker */
 async function refreshItems() {
@@ -326,12 +346,6 @@ function scrollChatToBottom() {
   }
 }
 
-/** Handle textarea input: update editing content + save draft */
-function onEditorInput(name: string, value: string) {
-  editingContent.value = { ...editingContent.value, [name]: value }
-  saveDraft(name, value)
-}
-
 /** Send a new chat message */
 async function sendChat(name: string) {
   const message = chatInputs.value[name]?.trim()
@@ -418,10 +432,10 @@ async function executeSingle(name: string) {
       >
         <div class="qr-card__header" @click="expandItem(item.name)">
           <span
-            v-if="item.status === 'new'"
+            v-if="modeStatusCheck(item.status)"
             class="qr-card__select"
             :class="{ 'qr-card__select--on': selected[item.name] }"
-            @click.stop="item.status === 'new' && toggleSelected(item.name)"
+            @click.stop="modeStatusCheck(item.status) && toggleSelected(item.name)"
           >{{ selected[item.name] ? '☑' : '☐' }}</span>
           <span class="qr-card__icon" :class="{ 'qr-card__icon--pulse': item.status === 'processing' }">{{ statusIcon(item.status) }}</span>
           <div class="qr-card__text">

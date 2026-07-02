@@ -192,18 +192,67 @@ function onEditTask(item: { name: string; content: string }) {
   note.value = item.content
 }
 
-// Execute agent — marks tasks as _wait, agent picks them up
-async function onExecute() {
+type ExecMode = 'execute' | 'stop' | 'delete'
+
+const execMode = ref<ExecMode>('execute')
+const showModeDropdown = ref(false)
+
+const modeLabels: Record<ExecMode, string> = {
+  execute: 'Выполнить',
+  stop: 'Остановить',
+  delete: 'Удалить',
+}
+
+const allModes: ExecMode[] = ['execute', 'stop', 'delete']
+
+function setMode(mode: ExecMode) {
+  execMode.value = mode
+  showModeDropdown.value = false
+}
+
+// Close dropdown on outside click
+function onDocClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest('.segmented-btn')) {
+    showModeDropdown.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('click', onDocClick))
+onUnmounted(() => document.removeEventListener('click', onDocClick))
+
+const hasSelected = computed(() => {
+  const q = queueRef.value
+  return q ? q.selectionCount > 0 : false
+})
+
+// Execute / Stop / Delete based on current mode
+async function onExecuteByMode() {
   const selected = queueRef.value?.getSelectedTasks() ?? []
   if (selected.length === 0) return
-  // Mark selected tasks as wait (queue will pick them up)
-  for (const name of selected) {
-    await fetch('/api/queue', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: name, status: 'wait' }),
-    })
+
+  if (execMode.value === 'execute') {
+    for (const name of selected) {
+      await fetch('/api/queue', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: name, status: 'wait' }),
+      })
+    }
+  } else if (execMode.value === 'stop') {
+    for (const name of selected) {
+      await fetch('/api/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+    }
+  } else if (execMode.value === 'delete') {
+    for (const name of selected) {
+      await fetch(`/api/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
+    }
   }
+
   queueRefreshKey.value++
 }
 
@@ -349,6 +398,11 @@ function stopRecording() {
   recording.value = false
   mediaRecorder.stop()
   mediaRecorder = null
+}
+
+function clearNote() {
+  note.value = ''
+  nextTick(autoResizeTextarea)
 }
 
 /** Auto-resize textarea to fit content, capped at 50% of available height */
@@ -545,6 +599,19 @@ function openPromptModal() {
 
             <div class="input-actions">
               <button
+                class="clear-btn"
+                :disabled="!note.trim()"
+                @click="clearNote"
+                title="Очистить"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  <line x1="10" y1="11" x2="10" y2="17"/>
+                  <line x1="14" y1="11" x2="14" y2="17"/>
+                </svg>
+              </button>
+              <button
                 class="mic-btn"
                 :class="{
                   'mic-btn--recording': recording,
@@ -580,14 +647,33 @@ function openPromptModal() {
               compact
               :refresh-key="queueRefreshKey"
               :editing-file="editingFile"
+              :exec-mode="execMode"
               @edit-task="onEditTask"
             />
 
             <div class="queue-footer">
-              <button
-                class="drawer-btn drawer-btn--exec"
-                @click="onExecute"
-              >Выполнить</button>
+              <div class="segmented-btn">
+                <button
+                  class="segmented-btn__main"
+                  :class="'segmented-btn__main--' + execMode"
+                  :disabled="!hasSelected"
+                  @click="onExecuteByMode"
+                >{{ modeLabels[execMode] }}</button>
+                <button
+                  class="segmented-btn__chevron"
+                  :class="{ 'segmented-btn__chevron--active': showModeDropdown }"
+                  @click.stop="showModeDropdown = !showModeDropdown"
+                >▼</button>
+                <div v-if="showModeDropdown" class="mode-dropdown">
+                  <button
+                    v-for="mode in allModes"
+                    :key="mode"
+                    class="mode-dropdown__item"
+                    :class="{ 'mode-dropdown__item--active': mode === execMode }"
+                    @click="setMode(mode)"
+                  >{{ modeLabels[mode] }}</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -893,6 +979,39 @@ function openPromptModal() {
 .mic-btn:active {
   transform: scale(0.92);
 }
+
+/* Clear button (trash icon) */
+.clear-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  color: #888;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-right: auto;
+}
+.clear-btn:hover {
+  background: rgba(248, 81, 73, 0.12);
+  color: #f85149;
+}
+.clear-btn:active {
+  transform: scale(0.92);
+}
+.clear-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.clear-btn:disabled:hover {
+  background: transparent;
+  color: #888;
+}
 .mic-btn--recording {
   background: #da3633 !important;
   animation: mic-pulse 0.6s ease-in-out infinite;
@@ -1006,11 +1125,105 @@ function openPromptModal() {
   display: flex;
   justify-content: flex-end;
   padding-top: 4px;
+  position: relative;
 }
 
-.drawer-btn--exec {
-  background: #1f6feb;
+/* ── Segmented Button ── */
+.segmented-btn {
+  display: inline-flex;
+  position: relative;
+  z-index: 100;
+}
+
+.segmented-btn__main {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
   color: #fff;
+}
+.segmented-btn__main:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.segmented-btn__main:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.segmented-btn__main--execute {
+  background: #1f6feb;
+}
+.segmented-btn__main--stop {
+  background: #da3633;
+}
+.segmented-btn__main--delete {
+  background: #f85149;
+}
+.segmented-btn__chevron {
+  padding: 8px 10px;
+  border: none;
+  border-radius: 0 6px 6px 0;
+  font-size: 9px;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+  color: #fff;
+  background: #1f6feb;
+  border-left: 1px solid rgba(255,255,255,0.2);
+}
+.segmented-btn__chevron:hover {
+  opacity: 0.85;
+}
+.segmented-btn__chevron--active {
+  background: #1158c7;
+}
+.segmented-btn__main--stop + .segmented-btn__chevron {
+  background: #da3633;
+}
+.segmented-btn__main--stop + .segmented-btn__chevron--active {
+  background: #b02626;
+}
+.segmented-btn__main--delete + .segmented-btn__chevron {
+  background: #f85149;
+}
+.segmented-btn__main--delete + .segmented-btn__chevron--active {
+  background: #d93a3a;
+}
+
+/* ── Mode Dropdown ── */
+.mode-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: #1c1c3a;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  overflow: hidden;
+  min-width: 140px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.mode-dropdown__item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: #c9d1d9;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+.mode-dropdown__item:hover {
+  background: rgba(88, 166, 255, 0.1);
+}
+.mode-dropdown__item--active {
+  color: #58a6ff;
+  font-weight: 700;
+  background: rgba(88, 166, 255, 0.08);
 }
 
 .drawer-btn {

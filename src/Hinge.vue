@@ -8,21 +8,21 @@
 
       <HingeCog
         :open="isOpen"
+        :component-list-open="componentListOpen"
         :cog-style="cogStyle"
         :position-x="position.x"
         :position-y="position.y"
-        :layer-active="gearLayerActive"
+        :always-on-top="alwaysOnTop"
         :candidate-labels="candidateLabels"
         :candidates="candidates"
         :model="model"
         :selected-element="selectedElement"
-        :collapsed="collapsed"
         @toggle-component="onToggleComponent"
+        @toggle-list="toggleComponentList"
         @pointerdown="handleGearPointerDown"
         @pointermove="onCogPointerMove"
         @pointerup="onCogPointerUp"
         @pointercancel="onCogPointerUp"
-        @togglayer="onToggleLayer"
       />
 
       <HingePanel
@@ -57,10 +57,18 @@ import { resolveVueFromElement } from './utils/vueTarget'
 import { formatPropsInline } from './utils/vueTarget'
 
 const isOpen = ref(false)
-const gearLayerActive = ref(false)
+const alwaysOnTop = ref(false)
 
-const collapsed = ref(false)
-let collapseTimer: ReturnType<typeof setTimeout> | null = null
+const componentListOpen = ref(false)
+
+onMounted(() => {
+  alwaysOnTop.value = !!(window as any).__HINGE_DEFAULT_PROJECT
+  document.addEventListener('click', onDocumentClick, true)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocumentClick, true)
+})
 
 const { position, cogStyle, clampPosition } = useCogPosition()
 const {
@@ -78,12 +86,23 @@ const { note, sendNote } = useQueueSubmit()
 const model = useTaskModel(note)
 
 function handleGearPointerDown(e: PointerEvent) {
-  resetCollapse()
   if (candidates.value.length === 0) {
-    // Force refresh candidates on gear click
     useTargetComponent(position)
   }
   onCogPointerDown(e)
+}
+
+function toggleComponentList() {
+  componentListOpen.value = !componentListOpen.value
+}
+
+function onDocumentClick(e: MouseEvent) {
+  if (!componentListOpen.value) return
+  const target = e.target as Node
+  const cogWrap = document.querySelector('.cog-wrap')
+  if (cogWrap && !cogWrap.contains(target)) {
+    componentListOpen.value = false
+  }
 }
 
 /** Extract relevant computed CSS values from an element */
@@ -113,14 +132,13 @@ function getComputedStyles(el: Element): Record<string, string> {
  * Adds/removes from the task model + manages DOM highlight.
  */
 function onToggleComponent(compositeKey: string, domEl: Element | null) {
-  resetCollapse()
   const inModel = model.hasComponent(compositeKey)
   if (inModel) {
     model.removeComponent(compositeKey)
   } else {
     const fields: Record<string, string> = {}
-    // Extract Vue props & computed styles from the element only when gear is NOT active (red)
-    if (domEl && !gearLayerActive.value) {
+    // Extract Vue props & computed styles from the element
+    if (domEl) {
       const vue = resolveVueFromElement(domEl)
       const propsStr = formatPropsInline(vue.props, 6)
       if (propsStr) fields.Props = propsStr
@@ -133,36 +151,6 @@ function onToggleComponent(compositeKey: string, domEl: Element | null) {
   if (domEl) {
     toggleComponentHighlight(compositeKey, domEl)
   }
-}
-
-function startCollapseTimer() {
-  if (collapseTimer) clearTimeout(collapseTimer)
-  collapseTimer = setTimeout(() => {
-    collapsed.value = true
-  }, 3000)
-}
-
-function resetCollapse() {
-  collapsed.value = false
-  if (collapseTimer) clearTimeout(collapseTimer)
-  startCollapseTimer()
-}
-
-onMounted(() => {
-  startCollapseTimer()
-})
-
-onUnmounted(() => {
-  if (collapseTimer) clearTimeout(collapseTimer)
-})
-
-watch(
-  () => [position.x, position.y],
-  () => resetCollapse(),
-)
-
-function onToggleLayer() {
-  gearLayerActive.value = !gearLayerActive.value
 }
 
 watch(() => model.components.value.length, () => {

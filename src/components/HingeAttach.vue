@@ -20,12 +20,16 @@ const uploading = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const btnRef = ref<HTMLButtonElement | null>(null)
 const dropdownStyle = ref({ top: '0px', left: '0px' })
-
+const previewFile = ref('')
 const count = computed(() => files.value.length)
+
+function previewImage(name: string) {
+  previewFile.value = previewFile.value === name ? '' : name
+}
 
 function loadFiles() {
   if (!props.folder) return
-  fetch(`/api/queue/attach?folder=${encodeURIComponent(props.folder)}`)
+  fetch(`/api/attach?folder=${encodeURIComponent(props.folder)}`)
     .then(r => r.json())
     .then((data: AttachFile[]) => { files.value = data })
     .catch(() => {})
@@ -44,7 +48,7 @@ async function addFile(e: Event) {
   }
 
   try {
-    const res = await fetch(`/api/queue/attach?folder=${encodeURIComponent(props.folder)}`, {
+    const res = await fetch(`/api/attach?folder=${encodeURIComponent(props.folder)}`, {
       method: 'POST',
       body: fd,
     })
@@ -60,7 +64,7 @@ async function addFile(e: Event) {
 async function removeFile(name: string) {
   try {
     await fetch(
-      `/api/queue/attach?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(name)}`,
+      `/api/attach?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(name)}`,
       { method: 'DELETE' }
     )
     loadFiles()
@@ -118,13 +122,19 @@ function closeDropdown() {
 
         <div v-if="files.length === 0" class="attach-dropdown__empty">Нет файлов</div>
 
-        <div v-for="f in files" :key="f.name" class="attach-dropdown__file">
+        <div v-for="f in files" :key="f.name" class="attach-dropdown__file" @click="f.name.match(/\.(png|jpg|jpeg|gif|webp|svg)$/i) && previewImage(f.name)" :class="{ 'attach-dropdown__file--img': previewFile === f.name }">
           <span class="attach-dropdown__file-icon">
             {{ f.name.match(/\.(png|jpg|jpeg|gif|webp|svg)$/i) ? '🖼' : '📄' }}
           </span>
           <span class="attach-dropdown__file-name">{{ f.name }}</span>
           <span class="attach-dropdown__file-size">{{ (f.size / 1024).toFixed(1) }} KB</span>
           <button class="attach-dropdown__del" @click.stop="removeFile(f.name)" title="Удалить">✕</button>
+          <img
+            v-if="previewFile === f.name"
+            :src="`/api/attach-file?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(f.name)}`"
+            class="attach-dropdown__preview"
+            @click.stop
+          />
         </div>
       </div>
     </Teleport>
@@ -256,6 +266,15 @@ function closeDropdown() {
   gap: 6px;
   padding: 6px 12px;
   border-top: 1px solid #222;
+  cursor: default;
+  flex-wrap: wrap;
+}
+.attach-dropdown__file--img {
+  background: rgba(88, 166, 255, 0.06);
+  cursor: pointer;
+}
+.attach-dropdown__file--img:hover {
+  background: rgba(88, 166, 255, 0.1);
 }
 .attach-dropdown__file-icon {
   font-size: 14px;
@@ -289,5 +308,13 @@ function closeDropdown() {
 }
 .attach-dropdown__del:hover {
   background: rgba(248, 81, 73, 0.15);
+}
+.attach-dropdown__preview {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border-radius: 4px;
+  margin-top: 4px;
+  background: #0d1117;
 }
 </style>

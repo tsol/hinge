@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
+import { hydrateDrafts, saveDraft, clearDraft } from '../composables/useTaskDraft'
 
 interface QueueItem {
   name: string
-  status: 'wait' | 'done' | 'processing'
+  status: 'new' | 'wait' | 'done' | 'processing'
   content: string
   component: string
   note: string
   url: string
   dom: string
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
 }
 
 const props = withDefaults(defineProps<{
@@ -21,28 +27,100 @@ const props = withDefaults(defineProps<{
   refreshKey: 0,
   editingFile: '',
 })
-const emit = defineEmits<{
-  'edit-task': [item: { name: string; content: string }]
-}>()
-
 const items = ref<QueueItem[]>([])
 const loading = ref(false)
 const error = ref('')
-const expanded = ref<string | null>(null)
 
-// Per-item: editing state
+// Use stem (name without status suffix) for expanded tracking — survives status changes
+const expandedStem = ref<string | null>(null)
+const EXPANDED_STORAGE_KEY = 'hinge:tabqueue:expanded'
+
+/** Derive stem from folder name */
+function stem(name: string): string {
+  return name.replace(/_(new|wait|done|processing)$/, '')
+}
+
+// Per-item: editing state (for raw chat.md edit mode)
 const editingContent = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
 // Per-item: selection for execution (wait tasks only, default checked)
 const selected = ref<Record<string, boolean>>({})
 // Processing flags per item
 const processingTask = ref<Record<string, boolean>>({})
+// Per-item: chat input (new message)
+const chatInputs = ref<Record<string, string>>({})
 // Auto-refresh timer
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+/** True when at least one task is processing */
+const hasProcessing = computed(() => Object.keys(processingTask.value).length > 0)
+
+/** Parse chat content into structured messages */
+function parseMessages(content: string): ChatMessage[] {
+  const result: ChatMessage[] = []
+
+  // Check if there are any **User:** or **Assistant:** markers
+  const hasMarkers = /\*\*User:\*\*|\*\*Assistant:\*\*/.test(content)
+
+  if (!hasMarkers) {
+    // Legacy format — entire content is the initial user message
+    if (content.trim()) {
+      result.push({ role: 'user', content: content.trim() })
+    }
+    return result
+  }
+
+  // Split on --- section markers
+  const sections = content.split(/\n---\n/)
+  for (const section of sections) {
+    const trimmed = section.trim()
+    if (!trimmed) continue
+
+    // Check for User marker
+    const userMatch = trimmed.match(/^\*\*User:\*\*\n([\s\S]*)/)
+    if (userMatch) {
+      result.push({ role: 'user', content: userMatch[1].trim() })
+      continue
+    }
+
+    // Check for Assistant marker
+    const asstMatch = trimmed.match(/^\*\*Assistant:\*\*\n([\s\S]*)/)
+    if (asstMatch) {
+      result.push({ role: 'assistant', content: asstMatch[1].trim() })
+      continue
+    }
+
+    // Unmarked section — treat as user message (initial prompt)
+    if (result.length === 0 && trimmed) {
+      result.push({ role: 'user', content: trimmed })
+    }
+  }
+
+  return result
+}
+
+/** Parse messages for the expanded item */
+const expandedMessages = computed(() => {
+  const name = expandedStem.value
+  if (!name) return []
+  // Find the item by stem
+  const item = items.value.find(i => stem(i.name) === name)
+  if (!item) return []
+  const content = editingContent.value[item.name] || ''
+  return parseMessages(content)
+})
 
 onMounted(() => {
   loadItems()
   startAutoRefresh()
+  // Restore accordion expanded state from localStorage
+  try {
+    const saved = localStorage.getItem(EXPANDED_STORAGE_KEY)
+    if (saved) {
+      expandedStem.value = saved
+      nextTick(() => scrollChatToBottom())
+    }
+  } catch { /* silent */ }
 })
 
 onUnmounted(() => {
@@ -53,30 +131,27 @@ watch(() => props.refreshKey, () => {
   refreshItems()
 })
 
-// Auto-scroll chat textarea when content updates for expanded item
-watch(editingContent, (val) => {
-  if (expanded.value && val[expanded.value] !== undefined) {
-    nextTick(() => scrollChatToBottom(expanded.value!))
-  }
+// Auto-scroll chat history when new messages appear
+watch(expandedMessages, () => {
+  nextTick(() => scrollChatToBottom())
 }, { deep: true })
 
 function initSelected(fresh: QueueItem[]) {
   const next: Record<string, boolean> = {}
   for (const item of fresh) {
-    // Keep existing selection for known items, default true for wait
     if (item.name in selected.value) {
-      next[item.name] = selected.value[item.name] && item.status === 'wait'
+      next[item.name] = selected.value[item.name] && item.status === 'new'
     } else {
-      next[item.name] = item.status === 'wait'
+      next[item.name] = item.status === 'new'
     }
   }
   selected.value = next
 }
 
-/** Get names of all selected wait tasks (processing excluded) */
+/** Get names of all selected new tasks */
 function getSelectedTasks(): string[] {
   return items.value
-    .filter(i => i.status === 'wait' && selected.value[i.name])
+    .filter(i => i.status === 'new' && selected.value[i.name])
     .map(i => i.name)
 }
 
@@ -84,7 +159,7 @@ function toggleSelected(name: string) {
   selected.value = { ...selected.value, [name]: !selected.value[name] }
 }
 
-defineExpose({ getSelectedTasks })
+defineExpose({ getSelectedTasks, stopAll })
 
 /** Silent refresh: keeps current loading state, no flicker */
 async function refreshItems() {
@@ -92,23 +167,28 @@ async function refreshItems() {
     const res = await fetch('/api/queue')
     if (!res.ok) return
     const fresh: QueueItem[] = await res.json()
-    // Track which tasks were processing before this refresh
     const wasProcessing = new Set(
       items.value.filter(i => i.status === 'processing').map(i => i.name)
     )
+    hydrateDrafts(editingContent, fresh)
     for (const item of fresh) {
-      // Preserve unsaved edits only for tasks that were NOT processing
-      // (processing tasks get fresh content from server — agent appended response)
-      if (item.name in editingContent.value && !wasProcessing.has(item.name)) {
-        ;(item as any).content = editingContent.value[item.name]
-      } else {
-        // Update editing content with fresh server data (e.g. agent reply)
-        editingContent.value = { ...editingContent.value, [item.name]: item.content }
+      const wasProc = Array.from(wasProcessing).some(n => stem(n) === stem(item.name))
+      if (wasProc && item.status !== 'processing') {
+        clearDraft(item.name)
+        // Fetch actual chat.md from server to get agent response
+        try {
+          const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
+          if (chatRes.ok) {
+            const serverContent = await chatRes.text()
+            if (serverContent) {
+              editingContent.value = { ...editingContent.value, [item.name]: serverContent }
+            }
+          }
+        } catch { /* silent */ }
       }
     }
     items.value = fresh
     initSelected(fresh)
-    // Update processing flags: any task still _processing = agent running
     const next: Record<string, boolean> = {}
     for (const item of fresh) {
       if (item.status === 'processing') next[item.name] = true
@@ -124,14 +204,14 @@ async function loadItems() {
     const res = await fetch('/api/queue')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const fresh: QueueItem[] = await res.json()
-    // Preserve unsaved editing content for existing items
-    for (const item of fresh) {
-      if (item.name in editingContent.value) {
-        ;(item as any).content = editingContent.value[item.name]
-      }
-    }
+    hydrateDrafts(editingContent, fresh)
     items.value = fresh
     initSelected(fresh)
+    const proc: Record<string, boolean> = {}
+    for (const item of fresh) {
+      if (item.status === 'processing') proc[item.name] = true
+    }
+    processingTask.value = proc
   } catch (e: any) {
     error.value = e.message || 'Failed to load queue'
   } finally {
@@ -142,8 +222,7 @@ async function loadItems() {
 function remove(name: string) {
   fetch(`/api/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
     .then(() => {
-      if (expanded.value === name) expanded.value = null
-      stopOutputPoll(name)
+      if (expandedStem.value === stem(name)) expandedStem.value = null
       refreshItems()
     })
 }
@@ -160,10 +239,23 @@ async function setStatus(name: string, status: string) {
 function statusIcon(status: string) {
   if (status === 'done') return '✅'
   if (status === 'processing') return '🔴'
-  return '⏳'
+  if (status === 'wait') return '⏳'
+  return '📥'
 }
 
-/** Extract header title: first ### Component: or ### File: value */
+/** Extract first meaningful line from content (fallback when no header found) */
+function firstMeaningfulLine(content: string): string {
+  const clean = content
+    .replace(/^### .+/gm, '')           // strip ### headers
+    .replace(/^[A-Za-z]\w+: .+/gm, '')  // strip Prop: value lines
+    .replace(/```[\s\S]*?```/g, '')     // strip code blocks
+    .trim()
+  const line = clean.split('\n').find(l => l.trim().length > 0)
+  if (!line) return '—'
+  return line.trim().slice(0, 60).replace(/\s+/g, ' ').trim()
+}
+
+/** Extract header title: first ### Component: or ### File: value, or first meaningful line */
 function headerTitle(content: string): string {
   const comp = content.match(/^### Component: (.+)/m)
   if (comp) return comp[1]
@@ -171,12 +263,11 @@ function headerTitle(content: string): string {
   if (file) return file[1]
   const page = content.match(/^### Page: (.+)/m)
   if (page) return page[1]
-  return 'untitled'
+  return firstMeaningfulLine(content)
 }
 
 /** Extract first 200 chars of meaningful text from all sections */
 function headerSubtitle(content: string): string {
-  // Strip all ### lines and field lines
   const clean = content
     .replace(/^### .+/gm, '')
     .replace(/^[A-Za-z]\w+: .+/gm, '')
@@ -187,22 +278,20 @@ function headerSubtitle(content: string): string {
 }
 
 function timeLabel(name: string) {
-  // Folder name format: 2026-06-27T20-28-43_403Z_wait
-  const stem = name.replace(/(_wait|_done|_processing)$/, '')
+  const stem = name.replace(/(_new|_wait|_done|_processing)$/, '')
   const parts = stem.split('_')
-  const ts = parts[0] // "2026-06-27T20-28-43"
-  const [datePart, timePart] = ts.split('T')
-  const time = (timePart || '').replace(/-/g, ':')
-  return `${datePart} ${time}`
+  const ts = parts[0]
+  if (!ts || !ts.includes('T')) return stem
+  const timeParts = ts.split('T')
+  if (timeParts.length < 2) return stem
+  const time = (timeParts[1] || '').replace(/-/g, ':')
+  return time.slice(0, 5) // HH:mm only
 }
 
-// ── Auto-refresh (every 2s while processing items exist) ──
+// ── Auto-refresh (every 2s while component is mounted) ──
 function startAutoRefresh() {
   autoRefreshTimer = setInterval(() => {
-    // Only refresh if there are processing tasks (silent, no flicker)
-    if (Object.keys(processingTask.value).length > 0) {
-      refreshItems()
-    }
+    refreshItems()
   }, 2000)
 }
 
@@ -215,11 +304,14 @@ function stopAutoRefresh() {
 
 // ── Expand / Collapse ──
 async function expandItem(name: string) {
-  if (expanded.value === name) {
-    expanded.value = null
+  const s = stem(name)
+  if (expandedStem.value === s) {
+    expandedStem.value = null
+    try { localStorage.removeItem(EXPANDED_STORAGE_KEY) } catch { /* silent */ }
     return
   }
-  expanded.value = name
+  expandedStem.value = s
+  try { localStorage.setItem(EXPANDED_STORAGE_KEY, s) } catch { /* silent */ }
 
   const item = items.value.find(i => i.name === name)
   if (!item) return
@@ -227,54 +319,94 @@ async function expandItem(name: string) {
   if (!(name in editingContent.value)) {
     editingContent.value = { ...editingContent.value, [name]: item.content }
   }
-  // Auto-scroll textarea to bottom (latest messages)
-  await nextTick()
-  scrollChatToBottom(name)
+  // NOTE: intentionally no scroll-to-bottom here — user sees the top of conversation on open
 }
 
-/** Scroll the chat textarea to the bottom */
-function scrollChatToBottom(name: string) {
-  const el = document.querySelector<HTMLTextAreaElement>(
-    `[data-chat-id="${name}"]`
-  )
+function scrollChatToBottom() {
+  const el = document.querySelector(`.chat-history--${expandedStem.value}`)
   if (el) {
     el.scrollTop = el.scrollHeight
   }
 }
 
-/** Execute a single task — marks as _processing, POSTs /api/execute */
-async function executeSingle(name: string) {
-  if (processingTask.value[name]) return // already running
-  // Mark as processing
-  await fetch('/api/queue', {
-    method: 'PUT',
+/** Handle textarea input: update editing content + save draft */
+function onEditorInput(name: string, value: string) {
+  editingContent.value = { ...editingContent.value, [name]: value }
+  saveDraft(name, value)
+}
+
+/** Send a new chat message */
+async function sendChat(name: string) {
+  const message = chatInputs.value[name]?.trim()
+  if (!message || processingTask.value[name]) return
+
+  // Optimistically add user message to displayed history
+  const currentContent = editingContent.value[name] || ''
+  const updatedContent = currentContent + `\n\n---\n\n**User:**\n${message}\n`
+  editingContent.value = { ...editingContent.value, [name]: updatedContent }
+  chatInputs.value = { ...chatInputs.value, [name]: '' }
+
+  // Send via chat endpoint (handles rename + agent internally)
+  await fetch('/api/chat/send', {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: name, status: 'processing' }),
+    body: JSON.stringify({ name, message }),
   })
-  // Fire agent
-  await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+
+  await nextTick()
+  scrollChatToBottom()
   refreshItems()
 }
 
-async function saveFile(name: string) {
-  const content = editingContent.value[name]
-  if (content === undefined) return
-  saving.value = { ...saving.value, [name]: true }
-  try {
-    // Write back to .hinge/<name>/input.md
-    await fetch('/api/write-file', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: `.hinge/${name}/input.md`, content }),
-    })
-  } catch { /* ignore */ }
-  saving.value = { ...saving.value, [name]: false }
+/** Cancel a running task (kill agent, revert to wait) */
+async function cancelTask(name: string) {
+  await fetch('/api/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  refreshItems()
 }
+
+/** Stop all processing tasks */
+async function stopAll() {
+  const processing = items.value.filter(i => i.status === 'processing')
+  for (const item of processing) {
+    fetch('/api/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: item.name }),
+    })
+  }
+  await new Promise(r => setTimeout(r, 300))
+  refreshItems()
+}
+
+/** Execute a single task (from _new or _wait) — puts in queue */
+async function executeSingle(name: string) {
+  if (processingTask.value[name]) return
+  await fetch('/api/queue', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name, status: 'wait' }),
+  })
+  refreshItems()
+}
+
+/** Cancel a running task (kill agent, revert to wait) */
 </script>
 
 <template>
   <div class="tab-content">
-    <div v-if="!compact" class="tab-header">Tasks <span class="tab-count">{{ items.length }}</span></div>
+    <div v-if="!compact" class="tab-header">
+      <span>Tasks <span class="tab-count">{{ items.length }}</span></span>
+      <button
+        v-if="hasProcessing"
+        class="tab-header__stop-all"
+        @click="stopAll"
+        title="Stop all running tasks"
+      >⏹ Stop All</button>
+    </div>
 
     <div v-if="loading" class="drawer-body"><p class="drawer-muted">Loading…</p></div>
     <div v-else-if="error" class="drawer-body"><p class="drawer-error">{{ error }}</p></div>
@@ -285,68 +417,88 @@ async function saveFile(name: string) {
         v-for="item in items"
         :key="item.name"
         class="qr-card"
-        :class="{ 'qr-card--done': item.status === 'done', 'qr-card--processing': item.status === 'processing', 'qr-card--expanded': expanded === item.name, 'qr-card--editing': props.editingFile === item.name }"
+        :class="{ 'qr-card--done': item.status === 'done', 'qr-card--wait': item.status === 'wait', 'qr-card--processing': item.status === 'processing', 'qr-card--expanded': expandedStem === stem(item.name), 'qr-card--editing': props.editingFile === item.name }"
       >
         <div class="qr-card__header" @click="expandItem(item.name)">
           <span
-            v-if="item.status === 'wait'"
+            v-if="item.status === 'new'"
             class="qr-card__select"
             :class="{ 'qr-card__select--on': selected[item.name] }"
-            @click.stop="item.status === 'wait' && toggleSelected(item.name)"
+            @click.stop="item.status === 'new' && toggleSelected(item.name)"
           >{{ selected[item.name] ? '☑' : '☐' }}</span>
-          <span class="qr-card__icon">{{ statusIcon(item.status) }}</span>
+          <span class="qr-card__icon" :class="{ 'qr-card__icon--pulse': item.status === 'processing' }">{{ statusIcon(item.status) }}</span>
           <div class="qr-card__text">
             <span class="qr-card__title">{{ headerTitle(item.content) }}</span>
             <span v-if="headerSubtitle(item.content)" class="qr-card__subtitle">{{ headerSubtitle(item.content) }}</span>
           </div>
           <span class="qr-card__time">{{ timeLabel(item.name) }}</span>
-          <span v-if="item.status === 'processing'" class="qr-card__pulse">●</span>
-          <span class="qr-card__chevron">{{ expanded === item.name ? '▲' : '▼' }}</span>
+          <button
+            v-if="item.status === 'wait'"
+            class="qr-card__return-btn"
+            @click.stop="setStatus(item.name, 'new')"
+            title="Вернуть в new"
+          >↩</button>
+          <span class="qr-card__chevron">{{ expandedStem === stem(item.name) ? '▲' : '▼' }}</span>
         </div>
 
-        <div v-if="expanded === item.name" class="qr-card__body">
-          <textarea
-            v-if="item.status !== 'processing'"
-            class="qr-card__editor"
-            :value="editingContent[item.name]"
-            @input="editingContent[item.name] = ($event.target as HTMLTextAreaElement).value"
-            :data-chat-id="item.name"
-            spellcheck="false"
-          ></textarea>
-          <textarea
-            v-else
-            class="qr-card__editor qr-card__editor--locked"
-            :value="editingContent[item.name]"
-            readonly
-            :data-chat-id="item.name"
-            spellcheck="false"
-          ></textarea>
+        <div v-if="expandedStem === stem(item.name)" class="qr-card__body">
+          <!-- Chat UI -->
+          <div class="chat-ui">
+            <!-- History (readonly) -->
+            <div
+              class="chat-history"
+              :class="`chat-history--${stem(item.name)}`"
+              v-if="expandedMessages.length > 0"
+            >
+              <div
+                v-for="(msg, idx) in expandedMessages"
+                :key="idx"
+                class="chat-msg"
+                :class="'chat-msg--' + msg.role"
+              >
+                <div class="chat-msg__body">
+                  <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? 'User' : 'Assistant' }}</div>
+                  <div class="chat-msg__text">{{ msg.content }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="chat-history chat-history--empty">
+              <p class="drawer-muted">No messages yet</p>
+            </div>
 
-          <!-- Chat is shown in the textarea above — no separate output section -->
+            <!-- Input row -->
+            <div class="chat-input-row">
+              <textarea
+                class="chat-input"
+                :placeholder="processingTask[item.name] ? 'Ожидание ответа…' : 'Сообщение агенту…'"
+                v-model="chatInputs[item.name]"
+                :disabled="processingTask[item.name]"
+                @keydown.enter.ctrl="sendChat(item.name)"
+                rows="2"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
 
           <!-- Actions row -->
           <div v-if="processingTask[item.name]" class="qr-card__processing-bar">
             <span class="qr-card__processing-text">🔄 Processing…</span>
+            <button
+              class="qr-btn qr-btn--cancel"
+              @click.stop="cancelTask(item.name)"
+              title="Stop task"
+            >⏹</button>
           </div>
           <div v-else class="qr-card__save-row">
-            <button class="qr-btn qr-btn--delete" @click.stop="remove(item.name)" title="Delete">✕</button>
-            <select class="qr-btn qr-btn--status-select" :value="item.status" @change.stop="setStatus(item.name, ($event.target as HTMLSelectElement).value)">
-              <option value="wait">⏳ Wait</option>
-              <option value="done">✅ Done</option>
-            </select>
+            <button class="qr-btn qr-btn--delete" :disabled="saving[item.name]" @click.stop="remove(item.name)" title="Delete">✕</button>
             <HingeAttach :folder="item.name" />
             <span class="qr-card__save-spacer"></span>
             <button
-              class="qr-btn qr-btn--save"
-              :disabled="saving[item.name]"
-              @click.stop="saveFile(item.name)"
-            >
-              {{ saving[item.name] ? 'Saving…' : 'Сохранить' }}
-            </button>
-            <button
               class="qr-btn qr-btn--run"
+              :disabled="saving[item.name]"
               @click.stop="executeSingle(item.name)"
-            title="Run Agent">▶</button>
+              title="Run Agent (first message)"
+            >▶</button>
           </div>
         </div>
       </div>
@@ -371,8 +523,24 @@ async function saveFile(name: string) {
   border-bottom: 1px solid #2a2a4a;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
   flex-shrink: 0;
+}
+.tab-header__stop-all {
+  background: transparent;
+  color: #ff6b6b;
+  border: 1px solid #ff6b6b;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.tab-header__stop-all:hover {
+  background: rgba(255, 107, 107, 0.15);
 }
 .tab-count {
   background: #2a2a4a;
@@ -407,9 +575,13 @@ async function saveFile(name: string) {
 .qr-card--done {
   opacity: 0.6;
 }
-.qr-card--processing {
+.qr-card--wait {
   border-color: #da3633;
   animation: qr-pulse-border 2s ease-in-out infinite;
+}
+.qr-card--processing {
+  border-color: #d29922;
+  border-width: 2px;
 }
 @keyframes qr-pulse-border {
   0%, 100% { border-color: #da3633; }
@@ -442,13 +614,8 @@ async function saveFile(name: string) {
   width: 18px;
   text-align: center;
 }
-.qr-card__pulse {
-  font-size: 10px;
-  color: #da3633;
+.qr-card__icon--pulse {
   animation: qr-blink 1s ease-in-out infinite;
-  flex-shrink: 0;
-  width: 10px;
-  text-align: center;
 }
 @keyframes qr-blink {
   0%, 100% { opacity: 1; }
@@ -483,6 +650,36 @@ async function saveFile(name: string) {
   font-family: ui-monospace, monospace;
   flex-shrink: 0;
 }
+.qr-card__return-btn {
+  background: transparent;
+  color: #d29922;
+  border: 1px solid #d29922;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, opacity 0.12s;
+}
+.qr-card__return-btn:hover {
+  background: rgba(210, 153, 34, 0.15);
+}
+.qr-card__stop-btn {
+  background: transparent;
+  color: #ff6b6b;
+  border: 1px solid #ff6b6b;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, opacity 0.12s;
+}
+.qr-card__stop-btn:hover {
+  background: rgba(255, 107, 107, 0.15);
+}
 .qr-card__chevron {
   font-size: 9px;
   color: #888;
@@ -491,21 +688,99 @@ async function saveFile(name: string) {
   text-align: center;
 }
 .qr-card__body {
-  padding: 0 10px 10px;
+  padding: 0 10px 6px;
   border-top: 1px solid #2a2a4a;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.qr-card__file-path {
+
+/* ── Chat UI ── */
+.chat-ui {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+.chat-history {
+  max-height: 110px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 10px;
+}
+.chat-history--empty {
+  min-height: 36px;
+  justify-content: center;
+  align-items: center;
+}
+.chat-msg {
+  max-width: 100%;
+}
+.chat-msg__avatar {
+  font-size: 13px;
+  margin-right: 4px;
+}
+.chat-msg__body {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.chat-msg--user .chat-msg__body {
+  background: rgba(31, 111, 235, 0.1);
+  border: 1px solid rgba(31, 111, 235, 0.25);
+}
+.chat-msg--assistant .chat-msg__body {
+  background: rgba(35, 134, 54, 0.1);
+  border: 1px solid rgba(35, 134, 54, 0.25);
+}
+.chat-msg__role {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #888;
+  margin-bottom: 3px;
+}
+.chat-msg__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c9d1d9;
+}
+
+/* ── Chat input ── */
+.chat-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+.chat-input {
+  flex: 1;
+  padding: 8px 10px;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 10px;
-  color: #666;
-  padding: 6px 0 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  resize: none;
+  box-sizing: border-box;
+  min-height: 36px;
+  max-height: 80px;
 }
-.qr-card__file-path--err {
-  color: #f85149;
+.chat-input:focus {
+  outline: none;
+  border-color: #58a6ff;
 }
+.chat-input:disabled {
+  opacity: 0.5;
+}
+
 .qr-card__editor {
   width: 100%;
   min-height: 120px;
@@ -524,16 +799,8 @@ async function saveFile(name: string) {
   outline: none;
   border-color: #58a6ff;
 }
-.qr-card__editor--locked {
-  opacity: 0.65;
-  color: #888;
-  resize: none;
-  cursor: not-allowed;
-}
-.qr-card__editor--locked:focus {
-  outline: none;
-  border-color: #2a2a4a;
-}
+
+/* Agent output */
 .qr-card__save-row {
   display: flex;
   justify-content: space-between;
@@ -542,19 +809,6 @@ async function saveFile(name: string) {
 }
 .qr-card__save-spacer {
   flex: 1;
-}
-.qr-btn--status-select {
-  background: #1a1a3a;
-  color: #c9d1d9;
-  border: 1px solid #2a2a4a;
-  padding: 4px 6px;
-  font-size: 11px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.qr-btn--save {
-  background: #1f6feb;
-  color: #fff;
 }
 .qr-btn {
   padding: 5px 12px;
@@ -569,17 +823,17 @@ async function saveFile(name: string) {
 .qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
 .qr-btn--run { background: #238636; color: #fff; padding: 5px 12px; }
+.qr-btn--cancel { background: transparent; color: #ff6b6b; border: 1px solid #ff6b6b; padding: 2px 8px; font-size: 14px; line-height: 1; }
 
 /* Agent output */
 .qr-card__select {
-  width: 14px;
+  width: 18px;
   text-align: center;
-  font-size: 11px;
+  font-size: 14px;
   flex-shrink: 0;
   cursor: pointer;
   color: #555;
   transition: color 0.12s;
-  margin-right: 2px;
 }
 .qr-card__select:hover {
   color: #58a6ff;
@@ -588,7 +842,6 @@ async function saveFile(name: string) {
   color: #58a6ff;
 }
 
-/* Agent output */
 .qr-card__output {
   border-top: 1px solid #1f6feb33;
   padding-top: 8px;
@@ -618,7 +871,7 @@ async function saveFile(name: string) {
 }
 .qr-card__output-text--live {
   border-color: #da3633;
-  max-height: 320px;
+  max-height: 190px;
 }
 .qr-card__output-loading {
   font-size: 11px;

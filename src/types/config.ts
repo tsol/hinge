@@ -1,46 +1,37 @@
-/**
- * Hinge config — open schema with typed actions.
- *
- * `.hinge/config.json` defines project-level agent behavior.
- * Any consumer can override actions, add plugin sections.
- *
- * Extensible via index signature: plugins add their own keys.
- */
 export interface AgentAction {
-  /** Unique action ID (e.g. "edit-code", "review-pr", "debug") */
   id: string
-  /** Human label shown in UI */
   label: string
-  /** Shell command to execute. `{input}` placeholder = task content file path */
   command: string
-  /** Working directory for command */
-  cwd?: string
-  /** Timeout in seconds (default 120) */
-  timeout?: number
-  /** Inject system prompt before task content? */
-  injectPrompt?: boolean
-  /** Tags for UI grouping */
-  tags?: string[]
+  cwd: string
+  timeout: number
+  injectPrompt: boolean
+  tags: string[]
 }
 
 export interface WhisperConfig {
   enabled: boolean
-  model: string
-  device: string
-  compute_type: string
+  script?: string          // path to whisper.sh, default: .hinge/whisper.sh
+  model?: string
+  device?: string
+  compute_type?: string
+}
+
+/** Agent script paths — each is an absolute or relative path to a shell script */
+export interface AgentScripts {
+  new_session: string     // receives prompt on stdin, alias as $1, outputs response on stdout
+  continue_session: string // receives message on stdin, alias as $1, outputs response
+}
+
+/** Agent configuration */
+export interface AgentConfig {
+  name: string            // 'hermes', 'opencode', etc. — used to find scripts in .hinge/agents/<name>/
+  scripts?: AgentScripts  // optional full override paths
 }
 
 export interface HingeConfig {
-  /** Schema version for forward compat */
-  version?: number
-  /** Agent actions available in this project */
-  actions?: AgentAction[]
-  /** Default action ID (falls back to first action) */
-  defaultAction?: string
-
-  // ── Known plugin sections ──
+  version: number
+  defaultAction: string
+  actions: AgentAction[]
   whisper?: WhisperConfig
-
-  // ── Extensible: any plugin can add its own section ──
-  [key: string]: unknown
+  agent?: AgentConfig
 }

@@ -98,5 +98,41 @@ export function useFileTree() {
     }
   }
 
-  return { root, loading, error, loadRoot, toggleDir, getChildren, isExpanded, highlightedPath, expandToPath }
+  /** Silent refresh root — no loading state, no flash, keeps expanded dirs */
+  async function refreshRoot() {
+    if (root.value.length === 0) {
+      await loadRoot()
+      return
+    }
+    try {
+      const fresh = await loadDir('.')
+      root.value = fresh
+      // Re-expand previously saved dirs
+      for (const p of expanded.value) {
+        if (!children.value.has(p)) {
+          children.value = new Map(children.value).set(p, await loadDir(p))
+        }
+      }
+    } catch { /* silent */ }
+  }
+
+  /** Re-fetch children for an already-expanded path (gentle, no loading state) */
+  async function refreshChildren(path: string) {
+    if (!expanded.value.has(path)) return
+    try {
+      const entries = await loadDir(path)
+      children.value = new Map(children.value).set(path, entries)
+    } catch { /* directory may have been renamed */ }
+  }
+
+  /** Refresh all expanded _processing folders */
+  async function refreshProcessingFolders() {
+    for (const p of expanded.value) {
+      if (p.includes('_processing')) {
+        await refreshChildren(p)
+      }
+    }
+  }
+
+  return { root, loading, error, loadRoot, refreshRoot, toggleDir, getChildren, isExpanded, highlightedPath, expandToPath, refreshChildren, refreshProcessingFolders }
 }

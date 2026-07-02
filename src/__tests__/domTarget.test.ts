@@ -1,10 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   formatDomElement,
   describeElement,
   pickBestDomElement,
-  getElementsAtPoint,
-  resolveTargetLabelAtPoint,
 } from '../utils/domTarget'
 
 function createEl(tag: string, attrs: Record<string, string> = {}, children: Element[] = []): Element {
@@ -20,11 +18,6 @@ function createEl(tag: string, attrs: Record<string, string> = {}, children: Ele
   }
   for (const c of children) el.appendChild(c)
   return el
-}
-
-function mockElementFromPoint(x: number, y: number, stack: Element[]): void {
-  // We can't fully mock elementsFromPoint in jsdom, so we use a simpler approach
-  // for the pure helper functions instead
 }
 
 // ---------------------------------------------------------------------------

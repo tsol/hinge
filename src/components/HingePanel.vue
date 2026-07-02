@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { HingeTarget } from '../types/target'
 import type { TaskModel } from '../composables/useTaskModel'
-import { useFileTree } from '../composables/useFileTree'
+import { useFileTree, type FileEntry } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
-import { getElementForComponent, syncHighlights } from '../composables/useElementHighlights'
+import { syncHighlights } from '../composables/useElementHighlights'
 import HingeTabQueue from './HingeTabQueue.vue'
 import HingeAttach from './HingeAttach.vue'
 import hljs from 'highlight.js/lib/core'
@@ -57,7 +57,7 @@ const fileMentioned = ref(false)
 watch(
   () => [selection.filePath, props.model.files.value.map(s => s.value)],
   ([path, files]) => {
-    fileMentioned.value = !!path && files.includes(path)
+    fileMentioned.value = !!path && files.includes(path as string)
   },
   { immediate: true },
 )
@@ -87,6 +87,41 @@ const queueRefreshKey = ref(0)
 const editingFile = ref('')
 const editingNoteRef = ref('')
 const queueRef = ref<InstanceType<typeof HingeTabQueue> | null>(null)
+
+// ─── Log polling (auto-refresh chat.log in Source tab) ──
+const logPollTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const treePollTimer = ref<ReturnType<typeof setInterval> | null>(null)
+
+/** Extract folder name from .hinge path, null if not chat.log in _processing */
+function getLogFolder(path: string): string | null {
+  const m = path.match(/\.hinge\/(.+_processing)\/chat\.log$/)
+  return m ? m[1] : null
+}
+
+function stopLogPoll() {
+  if (logPollTimer.value) {
+    clearInterval(logPollTimer.value)
+    logPollTimer.value = null
+  }
+}
+
+function startLogPoll(folder: string) {
+  stopLogPoll()
+  logPollTimer.value = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/log?file=${encodeURIComponent(folder)}`)
+      if (!res.ok) {
+        if (res.status === 404) stopLogPoll() // task renamed to _done → done
+        return
+      }
+      const text = await res.text()
+      // Gentle in-place update — no loading state, no flicker
+      if (text !== fileSrc.content.value) {
+        fileSrc.content.value = text
+      }
+    } catch { stopLogPoll() }
+  }, 2000)
+}
 
 // Drawer resizable width
 const STORAGE_KEY = 'hinge-drawer-width'
@@ -157,25 +192,19 @@ function onEditTask(item: { name: string; content: string }) {
   note.value = item.content
 }
 
-// Execute agent — marks tasks as _processing and fires backend
+// Execute agent — marks tasks as _wait, agent picks them up
 async function onExecute() {
   const selected = queueRef.value?.getSelectedTasks() ?? []
   if (selected.length === 0) return
-  // Optimistically mark selected tasks as processing
+  // Mark selected tasks as wait (queue will pick them up)
   for (const name of selected) {
     await fetch('/api/queue', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: name, status: 'processing' }),
+      body: JSON.stringify({ file: name, status: 'wait' }),
     })
   }
   queueRefreshKey.value++
-  // Fire agent execution — backend spawns hermes -z per _processing task
-  fetch('/api/execute', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-  })
 }
 
 // Load root files on mount when switching to files tab
@@ -249,9 +278,40 @@ const highlightedCode = computed(() => {
   return `<code class="hljs">${hljs.highlightAuto(content).value}</code>`
 })
 
+const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico']
+
+/** True when the selected file is an image */
+const isImage = computed(() => {
+  const path = selection.filePath
+  if (!path) return false
+  const ext = path.split('.').pop()?.toLowerCase()
+  return ext ? imageExts.includes(ext) : false
+})
+
+interface FlatTreeItem {
+  entry: FileEntry
+  depth: number
+}
+
+/** Flatten expanded file tree into a single array with depth for rendering */
+const flatTree = computed(() => {
+  const result: FlatTreeItem[] = []
+  function walk(entries: FileEntry[], depth: number) {
+    for (const entry of entries) {
+      result.push({ entry, depth })
+      if (entry.isDir && fileTree.isExpanded(entry.path)) {
+        walk(fileTree.getChildren(entry.path), depth + 1)
+      }
+    }
+  }
+  walk(fileTree.root.value, 0)
+  return result
+})
+
 // Voice recording
 const noteTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const recording = ref(false)
+const transcribing = ref(false)
 let mediaRecorder: MediaRecorder | null = null
 let audioChunks: Blob[] = []
 
@@ -265,16 +325,18 @@ function startRecording() {
       // Stop all tracks
       stream.getTracks().forEach(t => t.stop())
       if (audioChunks.length === 0) return
+      transcribing.value = true
       const blob = new Blob(audioChunks, { type: 'audio/webm' })
       try {
         const res = await fetch('/api/transcribe', { method: 'POST', body: blob })
         const { text, error: err } = await res.json()
         if (err) throw new Error(err)
         if (text && noteTextareaRef.value) {
-          note.value = (note.value ? note.value + '\n' : '') + text
+          note.value = (note.value ? note.value + '\n' : '') + text + '\n'
           autoResizeTextarea()
         }
       } catch { /* silent */ }
+      transcribing.value = false
       audioChunks = []
     }
     mediaRecorder.start()
@@ -372,6 +434,39 @@ watch(() => note.value, () => {
   nextTick(autoResizeTextarea)
 })
 
+// ─── Real-time polling ─────────────────────
+
+// Poll log when viewing chat.log from _processing folder
+watch([activeTab, () => selection.filePath], ([tab, file]) => {
+  stopLogPoll()
+  if (tab === 'source' && file) {
+    const folder = getLogFolder(file)
+    if (folder) startLogPoll(folder)
+  }
+})
+
+// Refresh file tree for _processing folders and root when Files tab is active
+watch(activeTab, (tab) => {
+  if (treePollTimer.value) {
+    clearInterval(treePollTimer.value)
+    treePollTimer.value = null
+  }
+  if (tab === 'files') {
+    treePollTimer.value = setInterval(() => {
+      fileTree.refreshProcessingFolders()
+      // Also refresh root if expanded (new files may appear)
+      if (fileTree.root.value.length > 0) {
+        fileTree.refreshRoot()
+      }
+    }, 5000)
+  }
+})
+
+onUnmounted(() => {
+  stopLogPoll()
+  if (treePollTimer.value) clearInterval(treePollTimer.value)
+})
+
 // ─── Prompt settings ─────────────────────
 const promptModal = ref(false)
 const promptText = ref('')
@@ -451,13 +546,17 @@ function openPromptModal() {
             <div class="input-actions">
               <button
                 class="mic-btn"
-                :class="{ 'mic-btn--recording': recording }"
-                @pointerdown.prevent="startRecording"
+                :class="{
+                  'mic-btn--recording': recording,
+                  'mic-btn--transcribing': transcribing
+                }"
+                :disabled="transcribing"
+                @pointerdown.prevent="!transcribing && startRecording()"
                 @pointerup.prevent="stopRecording"
                 @pointerleave="recording && stopRecording()"
-                :title="recording ? 'Отпустите для отправки' : 'Записать голос'"
-              >
-                {{ recording ? '🔴' : '🎤' }}
+                :title="recording ? 'Отпустите для отправки' : transcribing ? 'Транскрибация...' : 'Записать голос'"
+                >
+                {{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}
               </button>
               <HingeAttach v-if="editingFile" :folder="editingFile" />
               <button
@@ -506,77 +605,27 @@ function openPromptModal() {
           </div>
 
           <div v-else class="drawer-body drawer-body--scroll">
-              <template v-for="entry in fileTree.root.value" :key="entry.path">
-              <!-- Root entry -->
+            <template v-for="item in flatTree" :key="item.entry.path">
               <div
                 class="file-row"
-                :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === entry.path }"
-                @click="entry.isDir ? fileTree.toggleDir(entry.path) : openFile(entry.path)"
+                :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === item.entry.path }"
+                :style="{ paddingLeft: (14 + item.depth * 20) + 'px' }"
+                @click="item.entry.isDir ? fileTree.toggleDir(item.entry.path) : openFile(item.entry.path)"
               >
                 <span
-                  v-if="!entry.isDir"
+                  v-if="!item.entry.isDir"
                   class="file-check"
-                  :class="{ 'file-check--on': props.model.hasFile(entry.path) }"
-                  @click.stop="toggleFileMention(entry.path)"
-                >{{ props.model.hasFile(entry.path) ? '☑' : '☐' }}</span>
+                  :class="{ 'file-check--on': props.model.hasFile(item.entry.path) }"
+                  @click.stop="toggleFileMention(item.entry.path)"
+                >{{ props.model.hasFile(item.entry.path) ? '☑' : '☐' }}</span>
                 <span v-else class="file-check file-check--spacer"></span>
-                <span v-if="entry.isDir" class="file-toggle">
-                  {{ fileTree.isExpanded(entry.path) ? '▼' : '▶' }}
+                <span v-if="item.entry.isDir" class="file-toggle">
+                  {{ fileTree.isExpanded(item.entry.path) ? '▼' : '▶' }}
                 </span>
                 <span v-else class="file-toggle file-toggle--spacer"></span>
-                <span class="file-icon">{{ fileIcon(entry) }}</span>
-                <span class="file-name">{{ entry.name }}</span>
+                <span class="file-icon">{{ fileIcon(item.entry) }}</span>
+                <span class="file-name">{{ item.entry.name }}</span>
               </div>
-
-              <!-- Level-1 children (directly under their parent) -->
-              <template v-if="entry.isDir && fileTree.isExpanded(entry.path)">
-                <template v-for="child in fileTree.getChildren(entry.path)" :key="child.path">
-                  <div
-                    class="file-row file-row--l1"
-                    :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === child.path }"
-                    @click="child.isDir ? fileTree.toggleDir(child.path) : openFile(child.path)"
-                  >
-                    <span
-                      v-if="!child.isDir"
-                      class="file-check"
-                      :class="{ 'file-check--on': props.model.hasFile(child.path) }"
-                      @click.stop="toggleFileMention(child.path)"
-                    >{{ props.model.hasFile(child.path) ? '☑' : '☐' }}</span>
-                    <span v-else class="file-check file-check--spacer"></span>
-                    <span v-if="child.isDir" class="file-toggle">
-                      {{ fileTree.isExpanded(child.path) ? '▼' : '▶' }}
-                    </span>
-                    <span v-else class="file-toggle file-toggle--spacer"></span>
-                    <span class="file-icon">{{ fileIcon(child) }}</span>
-                    <span class="file-name">{{ child.name }}</span>
-                  </div>
-
-                  <!-- Level-2 children (directly under their parent) -->
-                  <template v-if="child.isDir && fileTree.isExpanded(child.path)">
-                    <div
-                      v-for="gc in fileTree.getChildren(child.path)"
-                      :key="gc.path"
-                      class="file-row file-row--l2"
-                      :class="{ 'file-row--highlighted': fileTree.highlightedPath.value === gc.path }"
-                      @click="gc.isDir ? fileTree.toggleDir(gc.path) : openFile(gc.path)"
-                    >
-                      <span
-                        v-if="!gc.isDir"
-                        class="file-check"
-                        :class="{ 'file-check--on': props.model.hasFile(gc.path) }"
-                        @click.stop="toggleFileMention(gc.path)"
-                      >{{ props.model.hasFile(gc.path) ? '☑' : '☐' }}</span>
-                      <span v-else class="file-check file-check--spacer"></span>
-                      <span v-if="gc.isDir" class="file-toggle">
-                        {{ fileTree.isExpanded(gc.path) ? '▼' : '▶' }}
-                      </span>
-                      <span v-else class="file-toggle file-toggle--spacer"></span>
-                      <span class="file-icon">{{ fileIcon(gc) }}</span>
-                      <span class="file-name">{{ gc.name }}</span>
-                    </div>
-                  </template>
-                </template>
-              </template>
             </template>
           </div>
         </div>
@@ -619,6 +668,7 @@ function openPromptModal() {
               @input="sourceEditingContent = ($event.target as HTMLTextAreaElement).value"
               spellcheck="false"
             ></textarea>
+            <img v-else-if="isImage" :src="`/api/raw-file?path=${encodeURIComponent(selection.filePath)}`" class="source-image" />
             <pre v-else class="source-code" v-html="highlightedCode"></pre>
             <div v-if="sourceEditMode" class="source-save-row">
               <button
@@ -847,9 +897,20 @@ function openPromptModal() {
   background: #da3633 !important;
   animation: mic-pulse 0.6s ease-in-out infinite;
 }
+.mic-btn--transcribing {
+  background: #1f6feb !important;
+  animation: mic-spin 0.8s linear infinite;
+  cursor: default;
+  opacity: 0.7;
+}
 @keyframes mic-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.5); }
   50% { box-shadow: 0 0 0 8px rgba(218, 54, 51, 0); }
+}
+@keyframes mic-spin {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
 }
 
 .input-scroll {
@@ -1005,22 +1066,6 @@ function openPromptModal() {
   outline-offset: -1px;
 }
 
-.file-row--l1 {
-  padding-left: 32px;
-}
-
-.file-row--l2 {
-  padding-left: 52px;
-}
-
-.file-row--child {
-  padding-left: 32px;
-}
-
-.file-row--child2 {
-  padding-left: 52px;
-}
-
 .file-toggle {
   width: 12px;
   text-align: center;
@@ -1084,6 +1129,15 @@ function openPromptModal() {
   padding: 0 !important;
   display: flex;
   flex-direction: column;
+}
+
+.source-image {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  padding: 14px;
+  flex: 1;
+  align-self: center;
 }
 
 .source-code {

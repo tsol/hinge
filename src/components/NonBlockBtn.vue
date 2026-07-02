@@ -26,8 +26,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { runTest, runSuite, type TestProgress } from '../test'
+import { ref } from 'vue'
+import { runTest, type TestProgress } from '../test'
 
 const runningCount = ref(0)
 const currentStage = ref('')

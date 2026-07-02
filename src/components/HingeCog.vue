@@ -5,15 +5,15 @@ import type { TaskModel } from '../composables/useTaskModel'
 
 const props = defineProps<{
   open: boolean
+  componentListOpen: boolean
   cogStyle: Record<string, string>
   positionX: number
   positionY: number
-  layerActive: boolean
+  alwaysOnTop: boolean
   candidateLabels: string[]
   candidates: Element[]
   model: TaskModel
   selectedElement: Element | null
-  collapsed: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,18 +21,14 @@ const emit = defineEmits<{
   pointermove: [event: PointerEvent]
   pointerup: [event: PointerEvent]
   pointercancel: [event: PointerEvent]
-  togglayer: []
   'toggle-component': [name: string, el: Element | null]
+  'toggle-list': []
 }>()
 
 const wrapStyle = computed(() => ({
   ...props.cogStyle,
-  zIndex: props.layerActive ? 2147483647 : 1,
+  zIndex: props.alwaysOnTop ? 100001 : 1,
 }))
-
-function onGearDblClick(_e: MouseEvent) {
-  emit('togglayer')
-}
 
 function onItemClick(label: string, el: Element | null) {
   emit('toggle-component', label, el)
@@ -42,7 +38,6 @@ function isActive(label: string): boolean {
   return props.model.hasComponent(label)
 }
 
-/** Items to display — filtered when collapsed */
 const displayItems = computed(() => {
   return props.candidateLabels
     .map((label, i) => ({
@@ -51,7 +46,6 @@ const displayItems = computed(() => {
       active: isActive(label),
       compName: label.split(' · ')[0].trim(),
     }))
-    .filter(item => !props.collapsed || item.active)
 })
 
 const ITEM_EST = 22
@@ -117,22 +111,18 @@ const listPos = computed(() => {
     <div class="cog-wrap" :style="wrapStyle">
       <div
         class="cog-icon"
-        :class="{
-          'cog-icon--open': open,
-          'cog-icon--topmost': layerActive,
-        }"
+        :class="{ 'cog-icon--open': open }"
         @pointerdown="$emit('pointerdown', $event)"
         @pointermove="$emit('pointermove', $event)"
         @pointerup="$emit('pointerup', $event)"
         @pointercancel="$emit('pointercancel', $event)"
-        @dblclick="onGearDblClick"
+        @click="$emit('toggle-list')"
       >
         ⚙️
       </div>
       <div
-        v-if="displayItems.length > 0"
+        v-if="componentListOpen && displayItems.length > 0"
         class="cog-list"
-        :class="{ 'cog-list--collapsed': collapsed }"
         :style="listPos"
       >
         <div
@@ -145,7 +135,7 @@ const listPos = computed(() => {
           }"
           @click="onItemClick(item.label, item.el)"
         >
-          {{ collapsed ? item.compName : item.label }}
+          {{ item.label }}
         </div>
       </div>
     </div>
@@ -190,12 +180,6 @@ const listPos = computed(() => {
   filter: drop-shadow(0 0 4px rgba(0, 123, 255, 0.6)) !important;
 }
 
-.cog-icon--topmost {
-  background: rgba(220, 40, 40, 0.25) !important;
-  box-shadow: 0 0 12px rgba(220, 40, 40, 0.5), 0 0 24px rgba(220, 40, 40, 0.2) !important;
-  filter: drop-shadow(0 0 6px rgba(220, 40, 40, 0.7)) !important;
-}
-
 .cog-list {
   position: absolute !important;
   display: flex !important;
@@ -207,19 +191,12 @@ const listPos = computed(() => {
   transition: opacity 0.2s !important;
 }
 
-.cog-list--collapsed {
-  opacity: 0.6 !important;
-}
-
 .cog-list__item {
   padding: 3px 10px !important;
   font-size: 11px !important;
   font-weight: 500 !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
   white-space: nowrap !important;
-  border-radius: 3px !important;
-  text-align: center !important;
-  transition: background 0.15s, opacity 0.15s !important;
   cursor: pointer !important;
   pointer-events: auto !important;
 }
@@ -240,9 +217,5 @@ const listPos = computed(() => {
 
 .cog-list__item--active:hover {
   background: rgb(0, 100, 230) !important;
-}
-
-.cog-list--collapsed .cog-list__item--active {
-  opacity: 1 !important;
 }
 </style>

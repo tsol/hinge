@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
-import type { HingeConfig, AgentAction } from '../types/config'
+import type { HingeConfig, AgentAction, AgentScripts } from '../types/config'
 
 // ── Built-in default system prompt (ships with package) ──
 // User overrides via .hinge/prompt.md
@@ -22,6 +22,24 @@ export const DEFAULT_ACTIONS: AgentAction[] = [
   },
 ]
 
+/**
+ * Resolve agent script paths — looks in .hinge/ relative to cwd (flat structure: .hinge/new-session.sh, .hinge/continue-session.sh)
+ * @deprecated agentName parameter is ignored — scripts are now in .hinge/ root
+ */
+export function resolveAgentScripts(_agentName?: string, cwd = process.cwd()): AgentScripts {
+  const hinge = resolve(cwd, '.hinge')
+
+  return {
+    new_session: resolve(hinge, 'new-session.sh'),
+    continue_session: resolve(hinge, 'continue-session.sh'),
+  }
+}
+
+/** Resolve whisper script path — looks in .hinge/ relative to cwd */
+export function resolveWhisperScript(cwd = process.cwd()): string {
+  return resolve(cwd, '.hinge', 'whisper.sh')
+}
+
 export const DEFAULT_CONFIG: HingeConfig = {
   version: 1,
   defaultAction: 'edit-code',
@@ -31,6 +49,9 @@ export const DEFAULT_CONFIG: HingeConfig = {
     model: 'tiny',
     device: 'cpu',
     compute_type: 'int8',
+  },
+  agent: {
+    name: 'hermes',
   },
 }
 
@@ -61,7 +82,6 @@ export function loadConfig(cwd = process.cwd()): HingeConfig {
 export function saveConfig(config: HingeConfig, cwd = process.cwd()) {
   const dir = hingeDir(cwd)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  // Omit runtime-only fields when persisting
   writeFileSync(configPath(cwd), JSON.stringify(config, null, 2), 'utf-8')
 }
 
@@ -92,10 +112,10 @@ export function readPrompt(cwd = process.cwd()): string {
   return DEFAULT_PROMPT_TEXT
 }
 
+// ── Merge ─────────────────────────────────────────────────
+
 /**
  * Deep merge user config over defaults.
- * actions[] replaces entirely (user opts in).
- * Everything else shallow-merge per section.
  */
 function mergeConfig(base: HingeConfig, user: Partial<HingeConfig>): HingeConfig {
   const result: HingeConfig = { ...base }
@@ -108,16 +128,19 @@ function mergeConfig(base: HingeConfig, user: Partial<HingeConfig>): HingeConfig
     result.actions = user.actions
   }
 
-  // known plugin sections: shallow merge
+  // shallow merge sections
   if (user.whisper) {
     result.whisper = { ...(base.whisper as object), ...user.whisper } as typeof result.whisper
   }
+  if (user.agent) {
+    result.agent = { ...(base.agent as object), ...user.agent } as typeof result.agent
+  }
 
   // anything extra: copy verbatim
-  const knownKeys = new Set(['version', 'defaultAction', 'actions', 'whisper'])
+  const knownKeys = new Set(['version', 'defaultAction', 'actions', 'whisper', 'agent'])
   for (const [k, v] of Object.entries(user)) {
     if (!knownKeys.has(k)) {
-      ;(result as Record<string, unknown>)[k] = v
+      ;(result as unknown as Record<string, unknown>)[k] = v
     }
   }
 

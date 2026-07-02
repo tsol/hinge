@@ -131,10 +131,7 @@ watch(() => props.refreshKey, () => {
   refreshItems()
 })
 
-// Auto-scroll chat history when new messages appear
-watch(expandedMessages, () => {
-  nextTick(() => scrollChatToBottom())
-}, { deep: true })
+// NO auto-scroll on every message change — only scroll once on accordion open
 
 function initSelected(fresh: QueueItem[]) {
   const next: Record<string, boolean> = {}
@@ -319,7 +316,7 @@ async function expandItem(name: string) {
   if (!(name in editingContent.value)) {
     editingContent.value = { ...editingContent.value, [name]: item.content }
   }
-  // NOTE: intentionally no scroll-to-bottom here — user sees the top of conversation on open
+  nextTick(() => scrollChatToBottom())
 }
 
 function scrollChatToBottom() {

@@ -275,11 +275,6 @@ async function onExecuteByMode() {
 }
 
 // Load root files on mount when switching to files tab
-const tabs = computed(() => [
-  { id: 'input' as const, label: lang.value.input },
-  { id: 'files' as const, label: lang.value.files },
-  { id: 'source' as const, label: lang.value.source },
-])
 
 function switchTab(tab: typeof activeTab.value) {
   activeTab.value = tab
@@ -593,13 +588,13 @@ function openPromptModal() {
         <div class="drawer-tabs">
           <button class="drawer-settings" @click="openPromptModal" :title="lang.settingsTooltip">⚙</button>
           <button
-            v-for="t in tabs"
-            :key="t.id"
+            v-for="id in (['input', 'files', 'source'] as const)"
+            :key="id"
             class="drawer-tab"
-            :class="{ 'drawer-tab--active': activeTab === t.id }"
-            @click="switchTab(t.id)"
+            :class="{ 'drawer-tab--active': activeTab === id }"
+            @click="switchTab(id)"
           >
-            {{ t.label }}
+            {{ lang[id] }}
           </button>
           <button class="drawer-close" @click="emit('close')" :title="lang.close">✕</button>
         </div>

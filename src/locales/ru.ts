@@ -3,7 +3,7 @@ import type { LocaleMessages } from './en'
 export const ru: LocaleMessages = {
   lang: 'Русский',
   /** Prompt modal */
-  systemPrompt: 'System Prompt',
+  systemPrompt: 'Системный промпт',
   promptLoading: 'Загрузка…',
   reset: 'Сброс',
   save: 'Сохранить',
@@ -21,17 +21,17 @@ export const ru: LocaleMessages = {
   stop: 'Остановить',
   delete: 'Удалить',
   /** Tabs */
-  input: 'Input',
-  files: 'Files',
-  source: 'Source',
+  input: 'Ввод',
+  files: 'Файлы',
+  source: 'Исходник',
   /** Files tab */
-  projectFiles: 'Project Files',
+  projectFiles: 'Файлы проекта',
   /** Source tab / gear */
-  settingsTooltip: 'System Prompt',
+  settingsTooltip: 'Системный промпт',
   view: 'Просмотр',
   edit: 'Редактировать',
   insertFilePath: 'Вставить путь к файлу в заметку',
-  noFileSelected: 'No file selected',
+  noFileSelected: 'Нет выбранного файла',
   sourceSave: 'Сохранить',
   /** Additional */
   saving: 'Сохранение…',
@@ -47,8 +47,8 @@ export const ru: LocaleMessages = {
   processing: 'Обработка…',
   stopTask: 'Остановить',
   stopTaskTitle: 'Остановить задачу',
-  runAgent: 'Run Agent',
-  runAgentTitle: 'Run Agent (первое сообщение)',
+  runAgent: 'Запуск агента',
+  runAgentTitle: 'Запуск агента (первое сообщение)',
   /** Attach */
   attachments: 'Вложения',
   attachmentsCount: 'Вложения ({count})',

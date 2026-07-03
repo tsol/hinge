@@ -6,7 +6,7 @@
       :disabled="runningCount > 0"
       @click="handleClick"
     >
-      {{ runningCount > 0 ? `Выполняется (${runningCount})...` : 'Запустить неблокирующий тест' }}
+      {{ runningCount > 0 ? lang.testRunning.replace('{count}', String(runningCount)) : lang.runTest }}
     </button>
 
     <div v-if="runningCount > 0" class="nbt-progress">
@@ -28,11 +28,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { runTest, type TestProgress } from '../test'
+import { useI18n } from '../composables/useI18n'
 
 const runningCount = ref(0)
 const currentStage = ref('')
 const progressPct = ref(0)
 const logs = ref<Array<{ elapsed: number; text: string }>>([])
+
+const { t: lang } = useI18n()
 
 function onProgress(p: TestProgress) {
   currentStage.value = p.detail
@@ -44,7 +47,7 @@ function onProgress(p: TestProgress) {
 async function handleClick() {
   runningCount.value++
   progressPct.value = 0
-  currentStage.value = 'Старт...'
+  currentStage.value = lang.value.starting
 
   runTest(onProgress)
     .then((result) => {

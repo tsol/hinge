@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from '../composables/useI18n'
 
 const props = defineProps<{
   folder: string
@@ -13,6 +14,8 @@ interface AttachFile {
 const emit = defineEmits<{
   changed: []
 }>()
+
+const { t: lang } = useI18n()
 
 const open = ref(false)
 const files = ref<AttachFile[]>([])
@@ -105,7 +108,7 @@ function closeDropdown() {
       @change="addFile"
     />
 
-    <button ref="btnRef" class="attach-btn" :class="{ 'attach-btn--active': open }" @click="toggle" :title="`Attachments (${count})`">
+    <button ref="btnRef" class="attach-btn" :class="{ 'attach-btn--active': open }" @click="toggle" :title="lang.attachmentsCount.replace('{count}', String(count))">
       <span class="attach-icon">📎</span>
       <span v-if="count > 0" class="attach-badge">{{ count }}</span>
     </button>
@@ -113,14 +116,14 @@ function closeDropdown() {
     <Teleport to="body">
       <div v-if="open" class="attach-backdrop" @click="closeDropdown"></div>
       <div v-if="open" class="attach-dropdown" :style="dropdownStyle">
-        <div class="attach-dropdown__header">Attachments</div>
+        <div class="attach-dropdown__header">{{ lang.attachments }}</div>
 
         <div class="attach-dropdown__add" @click="fileInputRef?.click()">
           <span class="attach-dropdown__plus">＋</span>
-          <span>{{ uploading ? 'Uploading…' : 'Добавить файл' }}</span>
+          <span>{{ uploading ? lang.uploading : lang.addFile }}</span>
         </div>
 
-        <div v-if="files.length === 0" class="attach-dropdown__empty">Нет файлов</div>
+        <div v-if="files.length === 0" class="attach-dropdown__empty">{{ lang.noFiles }}</div>
 
         <div v-for="f in files" :key="f.name" class="attach-dropdown__file" @click="f.name.match(/\.(png|jpg|jpeg|gif|webp|svg)$/i) && previewImage(f.name)" :class="{ 'attach-dropdown__file--img': previewFile === f.name }">
           <span class="attach-dropdown__file-icon">
@@ -128,7 +131,7 @@ function closeDropdown() {
           </span>
           <span class="attach-dropdown__file-name">{{ f.name }}</span>
           <span class="attach-dropdown__file-size">{{ (f.size / 1024).toFixed(1) }} KB</span>
-          <button class="attach-dropdown__del" @click.stop="removeFile(f.name)" title="Удалить">✕</button>
+          <button class="attach-dropdown__del" @click.stop="removeFile(f.name)" :title="lang.delete">✕</button>
           <img
             v-if="previewFile === f.name"
             :src="`/api/attach-file?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(f.name)}`"

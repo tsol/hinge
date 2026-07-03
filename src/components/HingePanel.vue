@@ -6,6 +6,7 @@ import { useFileTree, type FileEntry } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
 import { syncHighlights } from '../composables/useElementHighlights'
+import { useI18n } from '../composables/useI18n'
 import HingeTabQueue from './HingeTabQueue.vue'
 import HingeAttach from './HingeAttach.vue'
 import hljs from 'highlight.js/lib/core'
@@ -42,6 +43,8 @@ const emit = defineEmits<{
   send: [onSuccess?: () => void]
   close: []
 }>()
+
+const { t: lang, setLocale, currentLocale } = useI18n()
 
 const { selection, fromFile } = useSelectionStore()
 
@@ -212,11 +215,11 @@ function toggleModeDropdown() {
   }
 }
 
-const modeLabels: Record<ExecMode, string> = {
-  execute: 'Выполнить',
-  stop: 'Остановить',
-  delete: 'Удалить',
-}
+const modeLabels = computed((): Record<ExecMode, string> => ({
+  execute: lang.value.execute,
+  stop: lang.value.stop,
+  delete: lang.value.delete,
+}))
 
 const allModes: ExecMode[] = ['execute', 'stop', 'delete']
 
@@ -272,11 +275,11 @@ async function onExecuteByMode() {
 }
 
 // Load root files on mount when switching to files tab
-const tabs = [
-  { id: 'input' as const, label: 'Input' },
-  { id: 'files' as const, label: 'Files' },
-  { id: 'source' as const, label: 'Source' },
-]
+const tabs = computed(() => [
+  { id: 'input' as const, label: lang.value.input },
+  { id: 'files' as const, label: lang.value.files },
+  { id: 'source' as const, label: lang.value.source },
+])
 
 function switchTab(tab: typeof activeTab.value) {
   activeTab.value = tab
@@ -548,7 +551,7 @@ async function loadPrompt() {
     const res = await fetch('/api/prompt')
     promptText.value = await res.text()
   } catch {
-    promptText.value = 'Failed to load prompt'
+    promptText.value = lang.value.failedLoadPrompt
   }
   promptLoading.value = false
 }
@@ -588,7 +591,7 @@ function openPromptModal() {
       <div ref="drawerRef" class="drawer" :style="{ width: drawerWidth + 'px' }">
         <!-- Tabs -->
         <div class="drawer-tabs">
-          <button class="drawer-settings" @click="openPromptModal" title="System prompt">⚙</button>
+          <button class="drawer-settings" @click="openPromptModal" :title="lang.settingsTooltip">⚙</button>
           <button
             v-for="t in tabs"
             :key="t.id"
@@ -598,7 +601,7 @@ function openPromptModal() {
           >
             {{ t.label }}
           </button>
-          <button class="drawer-close" @click="emit('close')" title="Закрыть">✕</button>
+          <button class="drawer-close" @click="emit('close')" :title="lang.close">✕</button>
         </div>
 
         <!-- Tab: Input -->
@@ -609,7 +612,7 @@ function openPromptModal() {
               class="drawer-textarea"
               :value="note"
               @input="onNoteInput"
-              placeholder="Заметка / описание..."
+              :placeholder="lang.notePlaceholder"
             ></textarea>
 
             <div class="input-actions">
@@ -617,7 +620,7 @@ function openPromptModal() {
                 class="clear-btn"
                 :disabled="!note.trim()"
                 @click="clearNote"
-                title="Очистить"
+                :title="lang.clear"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="3 6 5 6 21 6"/>
@@ -636,7 +639,7 @@ function openPromptModal() {
                 @pointerdown.prevent="!transcribing && startRecording()"
                 @pointerup.prevent="stopRecording"
                 @pointerleave="recording && stopRecording()"
-                :title="recording ? 'Отпустите для отправки' : transcribing ? 'Транскрибация...' : 'Записать голос'"
+                :title="recording ? lang.releaseToSend : transcribing ? lang.transcribing : lang.recordVoice"
                 >
                 {{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}
               </button>
@@ -646,7 +649,7 @@ function openPromptModal() {
                 :disabled="!note.trim()"
                 @click="onAdd"
               >
-                {{ editingFile ? 'Сохранить' : 'Добавить' }}
+                {{ editingFile ? lang.saveEdit : lang.add }}
               </button>
               <button
                 v-if="editingFile"
@@ -696,10 +699,10 @@ function openPromptModal() {
 
         <!-- Tab: Files -->
         <div v-if="activeTab === 'files'" class="tab-content">
-          <div class="tab-header">Project Files</div>
+          <div class="tab-header">{{ lang.projectFiles }}</div>
 
           <div v-if="fileTree.loading.value" class="drawer-body">
-            <p class="drawer-muted">Loading…</p>
+            <p class="drawer-muted">{{ lang.promptLoading }}</p>
           </div>
 
           <div v-else-if="fileTree.error.value" class="drawer-body">
@@ -737,25 +740,25 @@ function openPromptModal() {
           <div class="tab-header tab-header--source">
             <span v-if="filePathParts.dir" class="tab-header__dir">{{ filePathParts.dir }}/</span>
             <span v-if="filePathParts.file" class="tab-header__file">{{ filePathParts.file }}</span>
-            <span v-else class="tab-header__file tab-header__file--muted">No file selected</span>
+            <span v-else class="tab-header__file tab-header__file--muted">{{ lang.noFileSelected }}</span>
             <button
               v-if="filePathParts.file"
               class="source-edit-toggle"
               :class="{ 'source-edit-toggle--active': sourceEditMode }"
               @click="toggleSourceEdit"
-              :title="sourceEditMode ? 'Просмотр' : 'Редактировать'"
+              :title="sourceEditMode ? lang.view : lang.edit"
             >{{ sourceEditMode ? '👁' : '✎' }}</button>
             <button
               v-if="filePathParts.file"
               class="source-mention-btn"
               :class="{ 'source-mention-btn--active': fileMentioned }"
               @click="mentionFile"
-              title="Вставить путь к файлу в заметку"
+              :title="lang.insertFilePath"
             >@</button>
           </div>
 
           <div v-if="fileSrc.loading.value" class="drawer-body">
-            <p class="drawer-muted">Loading…</p>
+            <p class="drawer-muted">{{ lang.promptLoading }}</p>
           </div>
 
           <div v-else-if="fileSrc.error.value" class="drawer-body">
@@ -777,7 +780,7 @@ function openPromptModal() {
                 class="drawer-btn drawer-btn--save-source"
                 :disabled="sourceSaving"
                 @click="saveSourceFile"
-              >{{ sourceSaving ? 'Saving…' : 'Сохранить' }}</button>
+              >{{ sourceSaving ? lang.saving : lang.sourceSave }}</button>
             </div>
           </div>
         </div>
@@ -792,11 +795,23 @@ function openPromptModal() {
       <div v-if="promptModal" class="prompt-overlay" @click.self="promptModal = false">
         <div class="prompt-modal">
           <div class="prompt-modal__header">
-            <span>System Prompt</span>
+            <span>{{ lang.systemPrompt }}</span>
+            <div class="prompt-modal__lang">
+              <button
+                class="lang-btn"
+                :class="{ 'lang-btn--active': currentLocale === 'en' }"
+                @click="setLocale('en')"
+              >EN</button>
+              <button
+                class="lang-btn"
+                :class="{ 'lang-btn--active': currentLocale === 'ru' }"
+                @click="setLocale('ru')"
+              >RU</button>
+            </div>
             <button class="drawer-close" @click="promptModal = false">✕</button>
           </div>
           <div class="prompt-modal__body" v-if="promptLoading">
-            <p class="drawer-muted">Loading…</p>
+            <p class="drawer-muted">{{ lang.promptLoading }}</p>
           </div>
           <div class="prompt-modal__body" v-else>
             <textarea
@@ -808,10 +823,10 @@ function openPromptModal() {
           </div>
           <div class="prompt-modal__footer">
             <button class="drawer-btn drawer-btn--prompt-reset" @click="resetPrompt" :disabled="promptSaving">
-              {{ promptSaving ? '…' : 'Сброс' }}
+              {{ promptSaving ? lang.saving : lang.reset }}
             </button>
             <button class="drawer-btn drawer-btn--prompt-save" @click="savePrompt" :disabled="promptSaving || promptLoading">
-              {{ promptSaving ? '…' : 'Сохранить' }}
+              {{ promptSaving ? lang.saving : lang.save }}
             </button>
           </div>
         </div>
@@ -1537,6 +1552,32 @@ function openPromptModal() {
   font-size: 14px;
   font-weight: 600;
   color: #e0e0e0;
+}
+.prompt-modal__lang {
+  display: flex;
+  gap: 4px;
+  margin: 0 8px;
+}
+.lang-btn {
+  background: #2a2a4a;
+  border: 1px solid transparent;
+  color: #888;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1.4;
+}
+.lang-btn:hover {
+  color: #e0e0e0;
+  border-color: #4a4a6a;
+}
+.lang-btn--active {
+  background: #0d6efd;
+  color: #fff;
+  border-color: #0d6efd;
 }
 .prompt-modal__body {
   flex: 1;

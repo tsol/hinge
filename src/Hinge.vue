@@ -137,6 +137,9 @@ function onToggleComponent(compositeKey: string, domEl: Element | null) {
     model.removeComponent(compositeKey)
   } else {
     const fields: Record<string, string> = {}
+    // Save relative page URL to know which page the component was added from
+    const url = window.location.pathname + window.location.search
+    if (url) fields.Url = url
     // Extract Vue props & computed styles from the element
     if (domEl) {
       const vue = resolveVueFromElement(domEl)

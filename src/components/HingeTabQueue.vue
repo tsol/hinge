@@ -2,6 +2,7 @@
 import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
 import { hydrateDrafts, clearDraft } from '../composables/useTaskDraft'
+import { useI18n } from '../composables/useI18n'
 
 type ExecMode = 'execute' | 'stop' | 'delete'
 
@@ -31,6 +32,7 @@ const props = withDefaults(defineProps<{
   editingFile: '',
   execMode: 'execute',
 })
+const { t: lang } = useI18n()
 const items = ref<QueueItem[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -244,15 +246,6 @@ function remove(name: string) {
     })
 }
 
-async function setStatus(name: string, status: string) {
-  await fetch('/api/queue', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: name, status }),
-  })
-  refreshItems()
-}
-
 function statusIcon(status: string) {
   if (status === 'done') return '✅'
   if (status === 'processing') return '🔴'
@@ -418,23 +411,23 @@ async function executeSingle(name: string) {
 <template>
   <div class="tab-content">
     <div v-if="!compact" class="tab-header">
-      <span>Tasks <span class="tab-count">{{ items.length }}</span></span>
+      <span>{{ lang.tasks }} <span class="tab-count">{{ items.length }}</span></span>
       <button
         v-if="hasProcessing"
         class="tab-header__stop-all"
         @click="stopAll"
-        title="Stop all running tasks"
-      >⏹ Stop All</button>
+        :title="lang.stopAll"
+      >{{ lang.stopAll }}</button>
     </div>
 
-    <div v-if="loading" class="drawer-body"><p class="drawer-muted">Loading…</p></div>
+    <div v-if="loading" class="drawer-body"><p class="drawer-muted">{{ lang.promptLoading }}</p></div>
     <div v-else-if="error" class="drawer-body"><p class="drawer-error">{{ error }}</p></div>
-    <div v-else-if="items.length === 0" class="drawer-body"><p class="drawer-muted">Queue is empty</p></div>
+    <div v-else-if="items.length === 0" class="drawer-body"><p class="drawer-muted">{{ lang.queueEmpty }}</p></div>
 
     <div v-else class="drawer-body drawer-body--scroll" :class="{ 'compact-scroll': compact }">
       <div
         v-for="item in items"
-        :key="item.name"
+        :key="stem(item.name)"
         class="qr-card"
         :class="{ 'qr-card--done': item.status === 'done', 'qr-card--wait': item.status === 'wait', 'qr-card--processing': item.status === 'processing', 'qr-card--expanded': expandedStem === stem(item.name), 'qr-card--editing': props.editingFile === item.name }"
       >
@@ -451,12 +444,7 @@ async function executeSingle(name: string) {
             <span v-if="headerSubtitle(item.content)" class="qr-card__subtitle">{{ headerSubtitle(item.content) }}</span>
           </div>
           <span class="qr-card__time">{{ timeLabel(item.name) }}</span>
-          <button
-            v-if="item.status === 'wait'"
-            class="qr-card__return-btn"
-            @click.stop="setStatus(item.name, 'new')"
-            title="Вернуть в new"
-          >↩</button>
+
           <span class="qr-card__chevron">{{ expandedStem === stem(item.name) ? '▲' : '▼' }}</span>
         </div>
 
@@ -476,20 +464,20 @@ async function executeSingle(name: string) {
                 :class="'chat-msg--' + msg.role"
               >
                 <div class="chat-msg__body">
-                  <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? 'User' : 'Assistant' }}</div>
+                  <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? lang.user : lang.assistant }}</div>
                   <div class="chat-msg__text">{{ msg.content }}</div>
                 </div>
               </div>
             </div>
             <div v-else class="chat-history chat-history--empty">
-              <p class="drawer-muted">No messages yet</p>
+              <p class="drawer-muted">{{ lang.noMessages }}</p>
             </div>
 
             <!-- Input row -->
             <div class="chat-input-row">
               <textarea
                 class="chat-input"
-                :placeholder="processingTask[item.name] ? 'Ожидание ответа…' : 'Сообщение агенту…'"
+                :placeholder="processingTask[item.name] ? lang.waitingResponse : lang.messageAgent"
                 v-model="chatInputs[item.name]"
                 :disabled="processingTask[item.name]"
                 @keydown.enter.ctrl="sendChat(item.name)"
@@ -501,22 +489,22 @@ async function executeSingle(name: string) {
 
           <!-- Actions row -->
           <div v-if="processingTask[item.name]" class="qr-card__processing-bar">
-            <span class="qr-card__processing-text">🔄 Processing…</span>
+            <span class="qr-card__processing-text">{{ lang.processing }}</span>
             <button
-              class="qr-btn qr-btn--cancel"
+              class="qr-btn qr-btn--stop"
               @click.stop="cancelTask(item.name)"
-              title="Stop task"
-            >⏹</button>
+              :title="lang.stopTaskTitle"
+            >{{ lang.stopTask }}</button>
           </div>
           <div v-else class="qr-card__save-row">
-            <button class="qr-btn qr-btn--delete" :disabled="saving[item.name]" @click.stop="remove(item.name)" title="Delete">✕</button>
+            <button class="qr-btn qr-btn--delete" :disabled="saving[item.name]" @click.stop="remove(item.name)" :title="lang.delete">✕</button>
             <HingeAttach :folder="item.name" />
             <span class="qr-card__save-spacer"></span>
             <button
               class="qr-btn qr-btn--run"
               :disabled="saving[item.name]"
               @click.stop="executeSingle(item.name)"
-              title="Run Agent (first message)"
+              :title="lang.runAgentTitle"
             >▶</button>
           </div>
         </div>
@@ -668,21 +656,6 @@ async function executeSingle(name: string) {
   color: #666;
   font-family: ui-monospace, monospace;
   flex-shrink: 0;
-}
-.qr-card__return-btn {
-  background: transparent;
-  color: #d29922;
-  border: 1px solid #d29922;
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s, opacity 0.12s;
-}
-.qr-card__return-btn:hover {
-  background: rgba(210, 153, 34, 0.15);
 }
 .qr-card__stop-btn {
   background: transparent;
@@ -842,7 +815,22 @@ async function executeSingle(name: string) {
 .qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
 .qr-btn--run { background: #238636; color: #fff; padding: 5px 12px; }
-.qr-btn--cancel { background: transparent; color: #ff6b6b; border: 1px solid #ff6b6b; padding: 2px 8px; font-size: 14px; line-height: 1; }
+.qr-btn--stop {
+  background: transparent;
+  color: #ff6b6b;
+  border: 1px solid #ff6b6b;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1.35;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+.qr-btn--stop:hover {
+  background: rgba(255, 107, 107, 0.15);
+}
 
 /* Agent output */
 .qr-card__select {
@@ -924,7 +912,7 @@ async function executeSingle(name: string) {
 .qr-card__processing-bar {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 6px;
   padding: 8px;
   background: rgba(218, 54, 51, 0.08);

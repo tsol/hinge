@@ -16,7 +16,7 @@ export default defineConfig({
       fileName: 'plugin',
     },
     rollupOptions: {
-      external: ['fs', 'path', 'child_process', 'vite'],
+      external: ['fs', 'path', 'child_process', 'http', 'vite', 'node:fs', 'node:path', 'node:child_process', 'node:http'],
     },
     emptyOutDir: false,
   },

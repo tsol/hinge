@@ -364,9 +364,10 @@ async function sendChat(name: string) {
     body: JSON.stringify({ name, message }),
   })
 
+  // Refresh first to get latest content from server, then scroll
+  await refreshItems()
   await nextTick()
   scrollChatToBottom()
-  refreshItems()
 }
 
 /** Cancel a running task (kill agent, revert to wait) */
@@ -393,15 +394,22 @@ async function stopAll() {
   refreshItems()
 }
 
-/** Execute a single task (from _new or _wait) — puts in queue */
+/** Execute a single task (from _new or _wait) — sends chat input first if present, then executes */
 async function executeSingle(name: string) {
   if (processingTask.value[name]) return
-  await fetch('/api/queue', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: name, status: 'wait' }),
-  })
-  refreshItems()
+  const message = chatInputs.value[name]?.trim()
+  if (message) {
+    // Textarea has text — send it via chat/send (which also triggers execution)
+    await sendChat(name)
+  } else {
+    // No text — just enqueue
+    await fetch('/api/queue', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: name, status: 'wait' }),
+    })
+    refreshItems()
+  }
 }
 
 /** Cancel a running task (kill agent, revert to wait) */

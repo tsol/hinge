@@ -196,6 +196,21 @@ type ExecMode = 'execute' | 'stop' | 'delete'
 
 const execMode = ref<ExecMode>('execute')
 const showModeDropdown = ref(false)
+const dropdownUp = ref(false)
+const chevronRef = ref<HTMLElement | null>(null)
+
+function toggleModeDropdown() {
+  showModeDropdown.value = !showModeDropdown.value
+  if (showModeDropdown.value) {
+    nextTick(() => {
+      const btn = chevronRef.value
+      if (!btn) return
+      const rect = btn.getBoundingClientRect()
+      const dropdownH = 42 + allModes.length * 34 // approx: padding + items height
+      dropdownUp.value = rect.bottom + dropdownH + 8 > window.innerHeight
+    })
+  }
+}
 
 const modeLabels: Record<ExecMode, string> = {
   execute: 'Выполнить',
@@ -660,11 +675,12 @@ function openPromptModal() {
                   @click="onExecuteByMode"
                 >{{ modeLabels[execMode] }}</button>
                 <button
+                  ref="chevronRef"
                   class="segmented-btn__chevron"
                   :class="{ 'segmented-btn__chevron--active': showModeDropdown }"
-                  @click.stop="showModeDropdown = !showModeDropdown"
+                  @click.stop="toggleModeDropdown"
                 >▼</button>
-                <div v-if="showModeDropdown" class="mode-dropdown">
+                <div v-if="showModeDropdown" class="mode-dropdown" :class="{ 'mode-dropdown--up': dropdownUp }">
                   <button
                     v-for="mode in allModes"
                     :key="mode"
@@ -1203,6 +1219,12 @@ function openPromptModal() {
   overflow: hidden;
   min-width: 140px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.mode-dropdown--up {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 4px;
 }
 .mode-dropdown__item {
   display: block;

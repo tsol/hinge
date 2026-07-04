@@ -780,15 +780,15 @@ function runTaskChunk(folderName: string) {
   const content = readFileSync(chatPath, 'utf-8')
 
   let agentInput: string
-  let scriptPath: string
+  let scriptType: string   // "new" or "continue" — used by wrapper
 
   if (isFirstRun) {
     agentInput = injectAttachments(folderPath, content)
-    scriptPath = scripts.new_session
+    scriptType = 'new'
     try { writeFileSync(sessionMarker, alias, 'utf-8') } catch { /* ignore */ }
   } else {
     agentInput = extractLastUserMessage(content)
-    scriptPath = scripts.continue_session
+    scriptType = 'continue'
   }
 
   const timeout = 300_000
@@ -796,7 +796,7 @@ function runTaskChunk(folderName: string) {
   try { appendFileSync(logPath, `=== Agent run started: ${new Date().toISOString()} ===\n`, 'utf-8') } catch { /* ignore */ }
 
   try {
-    const child = spawn('/bin/bash', [scriptPath, alias], {
+    const child = spawn('/bin/bash', [scripts.wrapper, alias, scriptType], {
       shell: false,
       cwd: process.cwd(),
       env: { ...process.env },

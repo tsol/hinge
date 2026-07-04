@@ -32,6 +32,7 @@ export function resolveAgentScripts(_agentName?: string, cwd = process.cwd()): A
   return {
     new_session: resolve(hinge, 'new-session.sh'),
     continue_session: resolve(hinge, 'continue-session.sh'),
+    wrapper: resolve(hinge, '.agent-wrapper.sh'),
   }
 }
 

@@ -60,22 +60,7 @@ if [ -n "$SESSION_ID" ]; then
     echo "$ALIAS=$SESSION_ID" >> "$DIR/.sessions_map.txt"
   fi
 fi
-echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$"
-# ── Self-cleanup: survives Node.js crash ──
-FOLDER="$DIR/\${ALIAS}_processing"
-CHAT_MD="$FOLDER/chat.md"
-OUTPUT_CLEAN=$(echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$")
-if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT_CLEAN" ]; then
-  {
-    echo ""
-    echo "---"
-    echo ""
-    echo "**Assistant:**"
-    echo "$OUTPUT_CLEAN"
-  } >> "$CHAT_MD"
-fi
-rm -f "$FOLDER/.pid"
-mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true`
+echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$"`
 
 const SCRIPT_CONTINUE_SESSION = `#!/bin/bash
 # continue-session.sh — Continue an existing Hermes session, or create new if not found
@@ -138,22 +123,7 @@ else
     fi
   fi
 fi
-echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$"
-# ── Self-cleanup: survives Node.js crash ──
-FOLDER="$DIR/\${ALIAS}_processing"
-CHAT_MD="$FOLDER/chat.md"
-OUTPUT_CLEAN=$(echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$")
-if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT_CLEAN" ]; then
-  {
-    echo ""
-    echo "---"
-    echo ""
-    echo "**Assistant:**"
-    echo "$OUTPUT_CLEAN"
-  } >> "$CHAT_MD"
-fi
-rm -f "$FOLDER/.pid"
-mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true`
+echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$"`
 
 const SCRIPT_WHISPER = `#!/bin/bash
 # whisper.sh — Transcribe audio file to text
@@ -206,10 +176,38 @@ for seg in segments:
     print(seg.text)
 " "$AUDIO_FILE" 2>/dev/null`
 
+// ── Agent wrapper (internal, NOT user-editable) ──────────────
+const SCRIPT_AGENT_WRAPPER = `#!/bin/bash
+# .agent-wrapper.sh — Hinge internal cleanup wrapper
+# AUTO-GENERATED — do not edit.
+set -e
+ALIAS="$1"
+SCRIPT_TYPE="$2"
+DIR="$(dirname "$0")"
+FOLDER="$DIR/\${ALIAS}_processing"
+PID_FILE="$FOLDER/.pid"
+CHAT_MD="$FOLDER/chat.md"
+echo "$$" > "$PID_FILE"
+if [ "$SCRIPT_TYPE" = "continue" ]; then
+    USER_SCRIPT="$DIR/continue-session.sh"
+else
+    USER_SCRIPT="$DIR/new-session.sh"
+fi
+OUTPUT=$("$USER_SCRIPT" "$ALIAS")
+CODE=$?
+if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT" ]; then
+    printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "$OUTPUT" >> "$CHAT_MD"
+fi
+echo "$OUTPUT"
+rm -f "$PID_FILE"
+mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
+exit $CODE`
+
 const SCRIPTS_TO_ENSURE: Record<string, string> = {
   'new-session.sh': SCRIPT_NEW_SESSION,
   'continue-session.sh': SCRIPT_CONTINUE_SESSION,
   'whisper.sh': SCRIPT_WHISPER,
+  '.agent-wrapper.sh': SCRIPT_AGENT_WRAPPER,
 }
 
 function ensureScripts() {
@@ -217,11 +215,12 @@ function ensureScripts() {
   if (!existsSync(hingeDir)) mkdirSync(hingeDir, { recursive: true })
   for (const [name, content] of Object.entries(SCRIPTS_TO_ENSURE)) {
     const p = resolve(hingeDir, name)
-    if (!existsSync(p)) {
+    const isInternal = name.startsWith('.')
+    if (isInternal || !existsSync(p)) {
       try {
         writeFileSync(p, content, 'utf-8')
         try { chmodSync(p, 0o755) } catch { /* non-blocking */ }
-        console.log(`[hinge] Created default script: .hinge/${name}`)
+        console.log(`[hinge] ${isInternal ? 'Updated' : 'Created'} script: .hinge/${name}`)
       } catch (e) {
         console.error(`[hinge] Failed to create .hinge/${name}:`, e)
       }

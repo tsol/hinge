@@ -143,8 +143,11 @@ function onToggleComponent(compositeKey: string, domEl: Element | null) {
     // Extract Vue props & computed styles from the element
     if (domEl) {
       const vue = resolveVueFromElement(domEl)
-      const propsStr = formatPropsInline(vue.props, 6)
-      if (propsStr) fields.Props = propsStr
+      // Don't save props for Hinge's own UI components — their target prop causes infinite recursion
+      if (!vue.component?.startsWith('Hinge')) {
+        const propsStr = formatPropsInline(vue.props, 6)
+        if (propsStr) fields.Props = propsStr
+      }
       const styles = getComputedStyles(domEl)
       const styleStr = Object.entries(styles).map(([k, v]) => `${k}=${v}`).join(' ')
       if (styleStr) fields.Styling = styleStr

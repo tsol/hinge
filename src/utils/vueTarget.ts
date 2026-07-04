@@ -31,6 +31,8 @@ const SKIP_COMPONENTS = new Set([
   'VToolbar',
 ])
 
+
+
 export function getVueComponentName(instance: VueInternalInstance): string | null {
   return (
     instance.type?.displayName ??

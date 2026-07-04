@@ -178,7 +178,18 @@ watch(() => props.execMode, () => {
   initSelected(items.value)
 })
 
-defineExpose({ getSelectedTasks, stopAll, selectionCount })
+/** Send external text (from HingePanel's input) as a chat message to the expanded accordion */
+async function sendExternalChat(text: string) {
+  const s = expandedStem.value
+  if (!s) return
+  const item = items.value.find(i => stem(i.name) === s)
+  if (!item) return
+  // Set the chat input and trigger sendChat
+  chatInputs.value = { ...chatInputs.value, [item.name]: text }
+  await sendChat(item.name)
+}
+
+defineExpose({ getSelectedTasks, stopAll, selectionCount, expandedStem, sendExternalChat })
 
 /** Silent refresh: keeps current loading state, no flicker */
 async function refreshItems() {
@@ -190,6 +201,18 @@ async function refreshItems() {
       items.value.filter(i => i.status === 'processing').map(i => i.name)
     )
     hydrateDrafts(editingContent, fresh)
+    // Migrate editingContent when status suffix changes (_new→_wait etc.)
+    const oldItems = items.value
+    for (const freshItem of fresh) {
+      const oldItem = oldItems.find(o => stem(o.name) === stem(freshItem.name))
+      if (oldItem && oldItem.name !== freshItem.name) {
+        const oldKey = oldItem.name
+        const newKey = freshItem.name
+        if (oldKey in editingContent.value && !(newKey in editingContent.value)) {
+          editingContent.value = { ...editingContent.value, [newKey]: editingContent.value[oldKey] }
+        }
+      }
+    }
     for (const item of fresh) {
       const wasProc = Array.from(wasProcessing).some(n => stem(n) === stem(item.name))
       if (wasProc && item.status !== 'processing') {
@@ -213,6 +236,18 @@ async function refreshItems() {
       if (item.status === 'processing') next[item.name] = true
     }
     processingTask.value = next
+
+    // Scroll to bottom if expanded item's status changed or content updated
+    if (expandedStem.value) {
+      const expandedItem = fresh.find(i => stem(i.name) === expandedStem.value)
+      if (expandedItem) {
+        const wasProc = Array.from(wasProcessing).some(n => stem(n) === stem(expandedItem.name))
+        const isNewContent = wasProc && expandedItem.status !== 'processing'
+        if (isNewContent) {
+          nextTick(() => scrollChatToBottom())
+        }
+      }
+    }
   } catch { /* silent */ }
 }
 
@@ -351,11 +386,18 @@ async function sendChat(name: string) {
   chatInputs.value = { ...chatInputs.value, [name]: '' }
 
   // Send via chat endpoint (handles rename + agent internally)
-  await fetch('/api/chat/send', {
+  const res = await fetch('/api/chat/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, message }),
   })
+  const data = await res.json()
+
+  // Carry optimistic content to the renamed key so it survives auto-refresh
+  // even if server's chat.md hasn't been written yet (race).
+  if (data.processingName && data.processingName !== name) {
+    editingContent.value = { ...editingContent.value, [data.processingName]: updatedContent }
+  }
 
   // Refresh first to get latest content from server, then scroll
   await refreshItems()
@@ -387,22 +429,15 @@ async function stopAll() {
   refreshItems()
 }
 
-/** Execute a single task (from _new or _wait) — sends chat input first if present, then executes */
+/** Set task to wait state (▶ button) — just enqueue, no execution */
 async function executeSingle(name: string) {
   if (processingTask.value[name]) return
-  const message = chatInputs.value[name]?.trim()
-  if (message) {
-    // Textarea has text — send it via chat/send (which also triggers execution)
-    await sendChat(name)
-  } else {
-    // No text — just enqueue
-    await fetch('/api/queue', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: name, status: 'wait' }),
-    })
-    refreshItems()
-  }
+  await fetch('/api/queue', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name, status: 'wait' }),
+  })
+  refreshItems()
 }
 
 /** Cancel a running task (kill agent, revert to wait) */

@@ -16,7 +16,7 @@ import {
 } from 'node:fs'
 import { resolve, relative, sep } from 'node:path'
 import { spawn } from 'node:child_process'
-import { loadConfig, resolveAgentScripts } from './utils/config'
+import { loadConfig, resolveAgentScripts, saveConfig, readPrompt } from './utils/config'
 
 // ── Shared state ──────────────────────────────────────────
 const runningTasks = new Set<string>()
@@ -266,7 +266,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         const { file, status } = JSON.parse(body.toString())
         if (!file) { json(res, { error: 'missing file' }, 400); return }
         const ok = status ? setQueueItemStatus(file, status) : toggleQueueItem(file)
-        if (ok) processNextTask()
+        if (ok && status !== 'wait') processNextTask()
         json(res, { ok })
       } catch { json(res, { error: 'invalid request' }, 400) }
       return
@@ -365,7 +365,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       const body = await readBuffer(req)
       try {
         const config = JSON.parse(body.toString())
-        const { saveConfig } = require('./utils/config')
         saveConfig(config)
         json(res, { ok: true })
       } catch { json(res, { error: 'invalid config' }, 400) }
@@ -378,7 +377,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   // ── Prompt ──
   if (pathname === '/api/prompt') {
     if (method === 'GET') {
-      const { readPrompt } = require('./utils/config')
       text(res, readPrompt())
       return
     }

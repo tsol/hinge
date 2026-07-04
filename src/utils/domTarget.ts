@@ -22,7 +22,9 @@ const BORING_CLASS_PREFIXES = ['v-application', 'v-main', 'v-overlay', 'v-toolba
 function isHingeElement(el: Element): boolean {
   // Check by container
   if (el.closest(`#${HINGE_ROOT_ID}`)) return true
-  // Teleported hinge UI elements (direct body children)
+  // Teleported hinge UI elements (direct body children) — check the element itself only,
+  // not ancestors, to avoid filtering target-page elements that happen to sit under
+  // a parent with a common class like 'menu-toggle', 'drawer', etc.
   const cls = el.classList
   if (cls.contains('cog-wrap') || cls.contains('cog-icon') || cls.contains('cog-list') ||
       cls.contains('menu-toggle') || cls.contains('burger-icon') ||

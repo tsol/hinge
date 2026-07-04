@@ -182,6 +182,11 @@ function onAdd() {
       editingNoteRef.value = ''
       queueRefreshKey.value++
     })
+  } else if (queueRef.value?.expandedStem) {
+    // Accordion is open — send text as chat message to the expanded task
+    queueRef.value.sendExternalChat(note.value)
+    note.value = ''
+    nextTick(autoResizeTextarea)
   } else {
     // Delegate to parent (Hinge.vue sends the POST).
     // Key increment happens via onSuccess callback after POST completes.
@@ -602,27 +607,41 @@ function openPromptModal() {
         <!-- Tab: Input -->
         <div v-if="activeTab === 'input'" class="tab-content">
           <div class="input-scroll">
-            <textarea
-              ref="noteTextareaRef"
-              class="drawer-textarea"
-              :value="note"
-              @input="onNoteInput"
-              :placeholder="lang.notePlaceholder"
-            ></textarea>
-
-            <div class="input-actions">
+            <div class="textarea-wrap">
+              <textarea
+                ref="noteTextareaRef"
+                class="drawer-textarea"
+                :value="note"
+                @input="onNoteInput"
+                :placeholder="lang.notePlaceholder"
+              ></textarea>
               <button
                 class="clear-btn"
                 :disabled="!note.trim()"
                 @click="clearNote"
                 :title="lang.clear"
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                  <line x1="10" y1="11" x2="10" y2="17"/>
-                  <line x1="14" y1="11" x2="14" y2="17"/>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
+              </button>
+            </div>
+
+            <div class="input-actions">
+              <button
+                class="drawer-btn drawer-btn--add"
+                :disabled="!note.trim()"
+                @click="onAdd"
+              >
+                {{ editingFile ? lang.saveEdit : lang.add }}
+              </button>
+              <button
+                v-if="editingFile"
+                class="drawer-btn drawer-btn--cancel"
+                @click="editingFile = ''; editingNoteRef = ''"
+              >
+                ✕
               </button>
               <button
                 class="mic-btn"
@@ -639,32 +658,6 @@ function openPromptModal() {
                 {{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}
               </button>
               <HingeAttach v-if="editingFile" :folder="editingFile" />
-              <button
-                class="drawer-btn drawer-btn--add"
-                :disabled="!note.trim()"
-                @click="onAdd"
-              >
-                {{ editingFile ? lang.saveEdit : lang.add }}
-              </button>
-              <button
-                v-if="editingFile"
-                class="drawer-btn drawer-btn--cancel"
-                @click="editingFile = ''; editingNoteRef = ''"
-              >
-                ✕
-              </button>
-            </div>
-
-            <HingeTabQueue
-              ref="queueRef"
-              compact
-              :refresh-key="queueRefreshKey"
-              :editing-file="editingFile"
-              :exec-mode="execMode"
-              @edit-task="onEditTask"
-            />
-
-            <div class="queue-footer">
               <div class="segmented-btn">
                 <button
                   class="segmented-btn__main"
@@ -689,6 +682,15 @@ function openPromptModal() {
                 </div>
               </div>
             </div>
+
+            <HingeTabQueue
+              ref="queueRef"
+              compact
+              :refresh-key="queueRefreshKey"
+              :editing-file="editingFile"
+              :exec-mode="execMode"
+              @edit-task="onEditTask"
+            />
           </div>
         </div>
 
@@ -1006,37 +1008,36 @@ function openPromptModal() {
   transform: scale(0.92);
 }
 
-/* Clear button (trash icon) */
+/* Clear button (X icon overlay on textarea) */
 .clear-btn {
-  width: 32px;
-  height: 32px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
   border: none;
-  border-radius: 50%;
+  border-radius: 4px;
   background: transparent;
   cursor: pointer;
-  color: #888;
+  color: #f85149;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s, transform 0.1s;
+  transition: background 0.15s, opacity 0.15s, transform 0.1s;
   line-height: 1;
-  flex-shrink: 0;
-  margin-right: auto;
+  z-index: 1;
+  opacity: 0.7;
 }
 .clear-btn:hover {
-  background: rgba(248, 81, 73, 0.12);
-  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
+  opacity: 1;
 }
 .clear-btn:active {
-  transform: scale(0.92);
+  transform: scale(0.88);
 }
 .clear-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-.clear-btn:disabled:hover {
-  background: transparent;
-  color: #888;
+  opacity: 0;
+  pointer-events: none;
 }
 .mic-btn--recording {
   background: #da3633 !important;
@@ -1106,9 +1107,13 @@ function openPromptModal() {
   border-radius: 3px;
 }
 
+.textarea-wrap {
+  position: relative;
+  margin-top: 8px;
+}
+
 .drawer-textarea {
   width: 100%;
-  margin-top: 8px;
   padding: 10px;
   border: 1px solid #2a2a4a;
   border-radius: 6px;
@@ -1130,7 +1135,7 @@ function openPromptModal() {
 .input-actions {
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
+  justify-content: space-between;
 }
 
 .drawer-btn--add {
@@ -1145,13 +1150,6 @@ function openPromptModal() {
   background: #30363d;
   color: #ccc;
   padding: 8px 12px;
-}
-
-.queue-footer {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 4px;
-  position: relative;
 }
 
 /* ── Segmented Button ── */

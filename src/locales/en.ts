@@ -47,6 +47,7 @@ export const en = {
   processing: 'Processing…',
   stopTask: 'Stop',
   stopTaskTitle: 'Stop the task',
+  stopped: 'Stopped',
   runAgent: 'Run Agent',
   runAgentTitle: 'Run Agent (first message)',
   /** Attach */

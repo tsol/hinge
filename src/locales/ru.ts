@@ -47,6 +47,7 @@ export const ru: LocaleMessages = {
   processing: 'Обработка…',
   stopTask: 'Остановить',
   stopTaskTitle: 'Остановить задачу',
+  stopped: 'Завис',
   runAgent: 'Запуск агента',
   runAgentTitle: 'Запуск агента (первое сообщение)',
   /** Attach */

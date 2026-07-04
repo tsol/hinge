@@ -53,6 +53,8 @@ const saving = ref<Record<string, boolean>>({})
 const selected = ref<Record<string, boolean>>({})
 // Processing flags per item
 const processingTask = ref<Record<string, boolean>>({})
+// Per-item: agent status {status, checkedAt}
+const agentStatus = ref<Record<string, { status: string; checkedAt: number }>>({})
 // Per-item: chat input (new message)
 const chatInputs = ref<Record<string, string>>({})
 // Auto-refresh timer
@@ -237,6 +239,29 @@ async function refreshItems() {
     }
     processingTask.value = next
 
+    // Clean stale agentStatus entries for non-processing tasks
+    const staleStatusKeys = Object.keys(agentStatus.value).filter(k => !(k in next))
+    if (staleStatusKeys.length > 0) {
+      const cleaned = { ...agentStatus.value }
+      for (const k of staleStatusKeys) delete cleaned[k]
+      agentStatus.value = cleaned
+    }
+
+    // Fetch agent status for processing tasks (non-blocking, best-effort)
+    for (const name of Object.keys(next)) {
+      fetch(`/api/agent-status?file=${encodeURIComponent(name)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.status) {
+            agentStatus.value = {
+              ...agentStatus.value,
+              [name]: { status: data.status, checkedAt: Date.now() }
+            }
+          }
+        })
+        .catch(() => { /* ignore */ })
+    }
+
     // Scroll to bottom if expanded item's status changed or content updated
     if (expandedStem.value) {
       const expandedItem = fresh.find(i => stem(i.name) === expandedStem.value)
@@ -286,6 +311,18 @@ function statusIcon(status: string) {
   if (status === 'processing') return '🔴'
   if (status === 'wait') return '⏳'
   return '📥'
+}
+
+/** Label for the processing status bar: "Processing… (3s)" or "⚠ Stopped (3s)" */
+function processingStatusLabel(name: string): string {
+  const a = agentStatus.value[name]
+  const l = lang.value
+  if (!a) return l.processing
+  const seconds = a.checkedAt ? Math.floor((Date.now() - a.checkedAt) / 1000) : 0
+  const secLabel = seconds <= 1 ? '1s' : `${seconds}s`
+  if (a.status === 'running') return `${l.processing} (${secLabel})`
+  if (a.status === 'stopped') return `⚠ ${l.stopped} (${secLabel})`
+  return `${l.processing} (${secLabel})`
 }
 
 /** Extract first meaningful line from content (fallback when no header found) */
@@ -539,7 +576,7 @@ async function executeSingle(name: string) {
 
           <!-- Actions row -->
           <div v-if="processingTask[item.name]" class="qr-card__processing-bar">
-            <span class="qr-card__processing-text">{{ lang.processing }}</span>
+            <span class="qr-card__processing-text">{{ processingStatusLabel(item.name) }}</span>
             <button
               class="qr-btn qr-btn--stop"
               @click.stop="cancelTask(item.name)"
@@ -633,8 +670,8 @@ async function executeSingle(name: string) {
   opacity: 0.6;
 }
 .qr-card--wait {
-  border-color: #da3633;
-  animation: qr-pulse-border 2s ease-in-out infinite;
+  border-color: #3a3a5a;
+  opacity: 0.85;
 }
 .qr-card--processing {
   border-color: #d29922;

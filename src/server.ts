@@ -338,28 +338,43 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       const { name } = JSON.parse(body.toString())
       if (!name) { json(res, { error: 'missing name' }, 400); return }
       const stemName = name.replace(/_(new|wait|done|processing)$/, '')
-      const processingName = `${stemName}_processing`
       const queueDir = resolve(process.cwd(), '.hinge')
-      const folderPath = resolve(queueDir, processingName)
 
-      const qIdx = taskQueue.indexOf(processingName)
-      if (qIdx !== -1) taskQueue.splice(qIdx, 1)
-
-      if (runningTasks.has(processingName)) {
-        runningTasks.delete(processingName)
-        const pidPath = resolve(folderPath, '.pid')
-        try {
-          const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
-          if (pid > 0) { try { process.kill(pid, 'SIGTERM') } catch { /* ignore */ } }
-        } catch { /* ignore */ }
-        try { unlinkSync(pidPath) } catch { /* ignore */ }
+      // Determine the actual current status by checking which folder exists
+      const candidates = [`${stemName}_processing`, `${stemName}_wait`, `${stemName}_new`, `${stemName}_done`, stemName]
+      let foundName: string | null = null
+      for (const c of candidates) {
+        const p = resolve(queueDir, c)
+        if (existsSync(p)) { foundName = c; break }
       }
+      if (!foundName) { json(res, { ok: true }); return }
 
-      if (existsSync(folderPath)) {
+      const folderPath = resolve(queueDir, foundName)
+
+      if (foundName.endsWith('_processing')) {
+        // Kill running process
+        const qIdx = taskQueue.indexOf(foundName)
+        if (qIdx !== -1) taskQueue.splice(qIdx, 1)
+        if (runningTasks.has(foundName)) {
+          runningTasks.delete(foundName)
+          const pidPath = resolve(folderPath, '.pid')
+          try {
+            const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
+            if (pid > 0) { try { process.kill(pid, 'SIGTERM') } catch { /* ignore */ } }
+          } catch { /* ignore */ }
+          try { unlinkSync(pidPath) } catch { /* ignore */ }
+        }
+        // Rename processing → new (allow retry)
         const newName = `${stemName}_new`
         try { renameSync(folderPath, resolve(queueDir, newName)) } catch { /* ignore */ }
+        // Free up a slot — start next task
+        processNextTask()
+      } else {
+        // _wait or _new → user cancelled, archive to _done
+        const doneName = `${stemName}_done`
+        try { renameSync(folderPath, resolve(queueDir, doneName)) } catch { /* ignore */ }
+        // Don't call processNextTask — nothing was running, don't start the task user just cancelled
       }
-      processNextTask()
       json(res, { ok: true })
     } catch (e: any) {
       json(res, { error: e.message || 'invalid request' }, 400)
@@ -424,6 +439,25 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       enqueueTask(e.name)
     }
     json(res, { ok: true, spawned })
+    return
+  }
+
+  // ── Agent status ──
+  if (pathname === '/api/agent-status') {
+    if (method !== 'GET') { json(res, { error: 'GET only' }, 405); return }
+    const file = url.searchParams.get('file')
+    if (!file) { json(res, { error: 'missing file param' }, 400); return }
+    const statusScript = resolve(process.cwd(), '.hinge', 'status.sh')
+    if (!existsSync(statusScript)) {
+      json(res, { status: 'error', error: 'status.sh not found' }, 500); return
+    }
+    const alias = file.replace(/_(new|wait|done|processing)$/, '')
+    try {
+      const result = await execScript(statusScript, [alias])
+      json(res, JSON.parse(result.trim() || '{"status":"error","error":"empty_output"}'))
+    } catch (e: any) {
+      json(res, { status: 'error', error: e.message })
+    }
     return
   }
 
@@ -827,6 +861,26 @@ function processNextTask() {
   }
 
   runTaskChunk(processingName)
+}
+
+// ── Script runner ──────────────────────────────────────────
+
+function execScript(scriptPath: string, args: string[]): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('/bin/bash', [scriptPath, ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env },
+      timeout: 5000,
+    })
+    let out = '', err = ''
+    child.stdout.on('data', (d: Buffer) => out += d.toString())
+    child.stderr.on('data', (d: Buffer) => err += d.toString())
+    child.on('close', (code) => {
+      if (code === 0) resolvePromise(out)
+      else reject(new Error(err || `exit ${code}`))
+    })
+    child.on('error', reject)
+  })
 }
 
 // ── Buffer helpers ─────────────────────────────────────────

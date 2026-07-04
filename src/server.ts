@@ -543,7 +543,7 @@ function readFilePath(filePath: string): string | null {
 interface QueueItem {
   name: string; status: 'wait' | 'done' | 'processing'; content: string
   component: string; note: string; url: string; dom: string
-  agentStatus?: { status: string; pid?: number } | null
+  agentStatus?: { status: string; pid?: number; elapsed?: number } | null
 }
 
 function appendToQueue(content: string) {
@@ -598,20 +598,28 @@ function listQueue(): QueueItem[] {
       return noteLines.join('\n').trim()
     })()
     // Agent status for processing tasks
-    let agentStatus: { status: string; pid?: number } | null = null
+    let agentStatus: { status: string; pid?: number; elapsed?: number } | null = null
     if (status === 'processing') {
+      // Calculate elapsed seconds from folder timestamp
+      const stem = name.replace(/_(new|wait|done|processing)$/, '')
+      const ts = stem.split('_')[0] // 2026-07-04T08-26-12
+      let elapsed: number | undefined
+      if (ts) {
+        const startMs = new Date(ts).getTime()
+        if (!isNaN(startMs)) elapsed = Math.floor((Date.now() - startMs) / 1000)
+      }
       const pidPath = resolve(queueDir, name, '.pid')
       if (existsSync(pidPath)) {
         const raw = readFileSync(pidPath, 'utf-8').trim()
         const pid = parseInt(raw, 10)
         if (pid && !isNaN(pid)) {
-          try { process.kill(pid, 0); agentStatus = { status: 'running', pid } }
-          catch { agentStatus = { status: 'stopped' } }
+          try { process.kill(pid, 0); agentStatus = { status: 'running', pid, elapsed } }
+          catch { agentStatus = { status: 'stopped', elapsed } }
         } else {
-          agentStatus = { status: 'stopped' }
+          agentStatus = { status: 'stopped', elapsed }
         }
       } else {
-        agentStatus = { status: 'no_pid' }
+        agentStatus = { status: 'no_pid', elapsed }
       }
     }
     items.push({ name, status, content: content || '', component, note, url, dom, agentStatus } as QueueItem)

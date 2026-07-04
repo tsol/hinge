@@ -14,7 +14,7 @@ interface QueueItem {
   note: string
   url: string
   dom: string
-  agentStatus?: { status: string; pid?: number } | null
+  agentStatus?: { status: string; pid?: number; elapsed?: number } | null
 }
 
 interface ChatMessage {
@@ -55,7 +55,7 @@ const selected = ref<Record<string, boolean>>({})
 // Processing flags per item
 const processingTask = ref<Record<string, boolean>>({})
 // Per-item: agent status {status, checkedAt}
-const agentStatus = ref<Record<string, { status: string; checkedAt: number }>>({})
+const agentStatus = ref<Record<string, { status: string; checkedAt: number; elapsed?: number }>>({})
 // Per-item: chat input (new message)
 const chatInputs = ref<Record<string, string>>({})
 // Auto-refresh timer
@@ -249,10 +249,14 @@ async function refreshItems() {
     }
 
     // Refresh agent status from queue response (server includes agentStatus for processing tasks)
-    const statusUpdates: Record<string, { status: string; checkedAt: number }> = {}
+    const statusUpdates: Record<string, { status: string; checkedAt: number; elapsed?: number }> = {}
     for (const item of fresh) {
       if (item.agentStatus && item.agentStatus.status) {
-        statusUpdates[item.name] = { status: item.agentStatus.status, checkedAt: Date.now() }
+        statusUpdates[item.name] = {
+          status: item.agentStatus.status,
+          checkedAt: Date.now(),
+          elapsed: item.agentStatus.elapsed,
+        }
       }
     }
     if (Object.keys(statusUpdates).length > 0) {
@@ -314,8 +318,11 @@ function statusIcon(status: string) {
 function processingStatusLabel(name: string): string {
   const a = agentStatus.value[name]
   const l = lang.value
-  if (!a || a.status === 'running' || a.status === 'no_pid') return l.processing
-  if (a.status === 'stopped') return `⚠ ${l.stopped}`
+  if (!a) return l.processing
+  const secLabel = a.elapsed != null ? (a.elapsed <= 1 ? '1s' : `${a.elapsed}s`) : ''
+  const suffix = secLabel ? ` (${secLabel})` : ''
+  if (a.status === 'running' || a.status === 'no_pid') return `${l.processing}${suffix}`
+  if (a.status === 'stopped') return `⚠ ${l.stopped}${suffix}`
   return l.processing
 }
 

@@ -246,8 +246,10 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
         })
       }
 
-      // Auto-recover stuck _processing folders — call /api/execute on the API server
-      setTimeout(() => {
+      // Auto-recover stuck _processing folders — periodic check
+      const RECOVERY_INTERVAL_MS = 5 * 60 * 1000
+
+      function recoverStuckTasks() {
         const queueDir = resolve(process.cwd(), '.hinge')
         if (!existsSync(queueDir)) return
         const entries = readdirSync(queueDir, { withFileTypes: true })
@@ -255,13 +257,14 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
         for (const e of entries) {
           if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
           const pidPath = resolve(queueDir, e.name, '.pid')
+          let pidAlive = false
           if (existsSync(pidPath)) {
             const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
             if (!isNaN(pid)) {
-              try { process.kill(pid, 0); continue } catch { /* dead → recover */ }
+              try { process.kill(pid, 0); pidAlive = true } catch { /* dead */ }
             }
           }
-          recovered.push(e.name)
+          if (!pidAlive) recovered.push(e.name)
         }
         if (recovered.length > 0) {
           const req = http.request(
@@ -277,10 +280,15 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
               })
             }
           )
-          req.on('error', () => { /* server not started yet */ })
+          req.on('error', () => { /* server not ready yet */ })
           req.end()
         }
-      }, 1000)
+      }
+
+      // First check after 1s, then every 5 minutes
+      setTimeout(recoverStuckTasks, 1000)
+      setInterval(recoverStuckTasks, RECOVERY_INTERVAL_MS)
+      console.log(`[hinge] Recovery: every ${RECOVERY_INTERVAL_MS / 60000} min, first check in 1s`)
     },
 
     closeBundle() {

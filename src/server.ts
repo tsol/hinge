@@ -47,6 +47,7 @@ export function markRunning(): void { serverStarted = true }
 
 // ── Request router ────────────────────────────────────────
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  try {
   const method = req.method ?? 'GET'
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
   const pathname = url.pathname
@@ -228,6 +229,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     const logPath = resolve(process.cwd(), '.hinge', file, 'chat.log')
     if (!existsSync(logPath)) { status(res, 404, ''); return }
     text(res, readFileSync(logPath, 'utf-8'))
+    return
+  }
+
+  // ── Queue run (trigger processing of queued tasks) ──
+  if (pathname === '/api/queue/run') {
+    if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
+    processNextTask()
+    json(res, { ok: true })
     return
   }
 
@@ -420,6 +429,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
 
   // ── 404 ──
   status(res, 404, 'not found')
+  } catch (e: any) {
+    console.error(`[hinge] Unhandled error in handleRequest:`, e)
+    try { status(res, 500, e?.message || 'Internal Server Error') } catch { /* avoid double-error */ }
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -730,11 +743,9 @@ function runTaskChunk(folderName: string) {
     child.on('close', () => {
       clearTimeout(killTimer)
       runningTasks.delete(folderName)
-      try { unlinkSync(resolve(folderPath, '.pid')) } catch { /* ignore */ }
-      processNextTask()
 
       if (stderr) {
-        try { appendFileSync(logPath, `\n[stderr]\n${stderr}\n`, 'utf-8') } catch { /* ignore */ }
+        try { appendFileSync(logPath, `\n[stderr]\n${stderr}\n`, 'utf-8') } catch {}
       }
 
       const finalAnswer = stdout.trim() || '(no output)'
@@ -742,23 +753,38 @@ function runTaskChunk(folderName: string) {
       try {
         const existing = readFileSync(chatPath, 'utf-8')
         writeFileSync(chatPath, existing + appendix, 'utf-8')
-      } catch { /* ignore */ }
+      } catch (e: any) {
+        console.error(`[hinge] Failed to write chat.md for ${folderName}:`, e)
+      }
 
+      // Remove .pid BEFORE rename so recovery doesn't try to re-spawn mid-rename
+      try { unlinkSync(resolve(folderPath, '.pid')) } catch {}
+
+      // Rename _processing → _done, THEN pick next task (avoids race)
       try {
         const doneName = folderName.replace('_processing', '_done')
         renameSync(folderPath, resolve(queueDir, doneName))
-      } catch { /* ignore */ }
+        console.log(`[hinge] Task ${folderName} → ${doneName}`)
+      } catch (e: any) {
+        console.error(`[hinge] Failed to rename ${folderName} to _done:`, e)
+      }
+
+      processNextTask()
     })
 
-    child.on('error', () => {
+    child.on('error', (err) => {
+      console.error(`[hinge] Agent spawn error for ${folderName}:`, err)
       clearTimeout(killTimer)
       runningTasks.delete(folderName)
-      try { unlinkSync(resolve(folderPath, '.pid')) } catch { /* ignore */ }
-      processNextTask()
+      try { unlinkSync(resolve(folderPath, '.pid')) } catch {}
       try {
         const doneName = folderName.replace('_processing', '_done')
         renameSync(folderPath, resolve(queueDir, doneName))
-      } catch { /* ignore */ }
+        console.log(`[hinge] Error recovery: ${folderName} → ${doneName}`)
+      } catch (e: any) {
+        console.error(`[hinge] Failed to rename on error for ${folderName}:`, e)
+      }
+      processNextTask()
     })
   } catch {
     runningTasks.delete(folderName)
@@ -795,7 +821,10 @@ function processNextTask() {
   const processingName = waitName.replace('_wait', '_processing')
   try {
     renameSync(resolve(queueDir, waitName), resolve(queueDir, processingName))
-  } catch { return }
+  } catch (e: any) {
+    console.error(`[hinge] Failed to promote ${waitName} to _processing:`, e)
+    return
+  }
 
   runTaskChunk(processingName)
 }

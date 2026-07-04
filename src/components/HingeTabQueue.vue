@@ -65,7 +65,7 @@ const hasProcessing = computed(() => Object.keys(processingTask.value).length > 
 function modeStatusCheck(status: string): boolean {
   if (props.execMode === 'stop') return status === 'wait' || status === 'processing'
   if (props.execMode === 'delete') return status === 'new' || status === 'done'
-  return status === 'new' // execute mode
+  return status === 'new' || status === 'wait' // execute mode
 }
 
 /** Parse chat content into structured messages */
@@ -184,9 +184,9 @@ async function sendExternalChat(text: string) {
   if (!s) return
   const item = items.value.find(i => stem(i.name) === s)
   if (!item) return
-  // Set the chat input and trigger sendChat
+  // Set the chat input and use executeSingle (unified flow: PATCH + wait)
   chatInputs.value = { ...chatInputs.value, [item.name]: text }
-  await sendChat(item.name)
+  await executeSingle(item.name)
 }
 
 defineExpose({ getSelectedTasks, stopAll, selectionCount, expandedStem, sendExternalChat })
@@ -429,15 +429,30 @@ async function stopAll() {
   refreshItems()
 }
 
-/** Set task to wait state (▶ button) — just enqueue, no execution */
+/** Set task to wait state (▶ button) — enqueue + save chat text if present */
 async function executeSingle(name: string) {
   if (processingTask.value[name]) return
+  const message = chatInputs.value[name]?.trim()
+  if (message) {
+    // Append message to chat content via PATCH first
+    const currentContent = editingContent.value[name] || ''
+    const updatedContent = currentContent ? currentContent + `\n\n---\n\n**User:**\n${message}\n` : `**User:**\n${message}\n`
+    await fetch('/api/queue', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: name, content: updatedContent }),
+    })
+    editingContent.value = { ...editingContent.value, [name]: updatedContent }
+    chatInputs.value = { ...chatInputs.value, [name]: '' }
+  }
+  // Set status to wait (server won't auto-start — guarded by status !== 'wait')
   await fetch('/api/queue', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ file: name, status: 'wait' }),
   })
   refreshItems()
+  nextTick(() => scrollChatToBottom())
 }
 
 /** Cancel a running task (kill agent, revert to wait) */

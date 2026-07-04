@@ -262,6 +262,8 @@ async function onExecuteByMode() {
         body: JSON.stringify({ file: name, status: 'wait' }),
       })
     }
+    // Trigger agent to pick up the first _wait task
+    await fetch('/api/queue/run', { method: 'POST' })
   } else if (execMode.value === 'stop') {
     for (const name of selected) {
       await fetch('/api/cancel', {

@@ -451,9 +451,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     if (!existsSync(statusScript)) {
       json(res, { status: 'error', error: 'status.sh not found' }, 500); return
     }
-    const alias = file.replace(/_(new|wait|done|processing)$/, '')
+    // status.sh takes the full folder name (with _processing suffix)
     try {
-      const result = await execScript(statusScript, [alias])
+      const result = await execScript(statusScript, [file])
       json(res, JSON.parse(result.trim() || '{"status":"error","error":"empty_output"}'))
     } catch (e: any) {
       json(res, { status: 'error', error: e.message })

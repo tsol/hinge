@@ -187,6 +187,15 @@ DIR="$(dirname "$0")"
 FOLDER="$DIR/\${ALIAS}_processing"
 PID_FILE="$FOLDER/.pid"
 CHAT_MD="$FOLDER/chat.md"
+
+# Trap SIGTERM/SIGINT so a kill from Node timeout cleans up properly
+_cleanup() {
+  rm -f "$PID_FILE"
+  mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
+  exit 0
+}
+trap _cleanup TERM INT
+
 echo "$$" > "$PID_FILE"
 if [ "$SCRIPT_TYPE" = "continue" ]; then
     USER_SCRIPT="$DIR/continue-session.sh"
@@ -231,15 +240,35 @@ function ensureScripts() {
 // ── Vite Plugin ────────────────────────────────────────────
 export interface HingePluginOptions {
   serverPort?: number
+  /** Mark as the main app (dev playground) — sets __HINGE_DEFAULT_PROJECT for always-on-top cog */
+  isMainApp?: boolean
+}
+
+// Scan for a free port — tries port, then port+1, ... port+20
+// Uses http.createServer (same API as net.createServer for listening) to avoid
+// bundler issues with 'net' module in Vite library mode
+function findFreePort(start: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    function tryPort(port: number) {
+      if (port > start + 20) return reject(new Error('No free port found'))
+      const srv = http.createServer()
+      srv.on('error', () => { srv.close(); tryPort(port + 1) })
+      srv.listen(port, () => { srv.close(() => resolve(port)) })
+    }
+    tryPort(start)
+  })
 }
 
 export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
-  const port = options.serverPort ?? 5177
+  // Port resolved lazily — determined in config() hook before proxy is set
+  let port: number
 
   return {
     name: 'hinge-plugin',
 
-    config(userConfig: UserConfig) {
+    async config(userConfig: UserConfig) {
+      // Auto-detect free port if not explicitly set
+      port = options.serverPort ?? await findFreePort(5177)
       // Inject Vite proxy — forward /api/* to the hinge API server
       const existingProxy = (userConfig.server as any)?.proxy ?? {}
       return {
@@ -256,7 +285,10 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
     },
 
     transformIndexHtml() {
-      return [{ tag: 'script', injectTo: 'head-prepend', children: 'window.__HINGE_DEFAULT_PROJECT=true;' }]
+      // Only set __HINGE_DEFAULT_PROJECT for the main dev app (not lib consumers like MOGU)
+      if (options.isMainApp) {
+        return [{ tag: 'script', injectTo: 'head-prepend', children: 'window.__HINGE_DEFAULT_PROJECT=true;' }]
+      }
     },
 
     configureServer() {

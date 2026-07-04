@@ -4,7 +4,7 @@ import { resolve } from 'path'
 import { hingeApiPlugin } from './vite.api.plugin'
 
 export default defineConfig({
-  plugins: [vue(), hingeApiPlugin()],
+  plugins: [vue(), hingeApiPlugin({ isMainApp: true })],
   root: resolve(__dirname, 'dev'),
   build: {
     outDir: resolve(__dirname, 'dist-dev'),

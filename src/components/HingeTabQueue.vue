@@ -48,7 +48,8 @@ function stem(name: string): string {
   return name.replace(/_(new|wait|done|processing)$/, '')
 }
 
-// Per-item: editing state (for raw chat.md edit mode)
+// Per-stem: editing state — keyed by stem (no status suffix) so content
+// survives status transitions (_wait→_processing→_done) without migration.
 const editingContent = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
 // Per-item: selection for execution (wait tasks only, default checked)
@@ -123,7 +124,7 @@ const expandedMessages = computed(() => {
   // Find the item by stem
   const item = items.value.find(i => stem(i.name) === name)
   if (!item) return []
-  const content = editingContent.value[item.name] || ''
+  const content = editingContent.value[name] || '' // name is already expandedStem
   return parseMessages(content)
 })
 
@@ -204,30 +205,18 @@ async function refreshItems() {
     const wasProcessing = new Set(
       items.value.filter(i => i.status === 'processing').map(i => i.name)
     )
-    hydrateDrafts(editingContent, fresh)
-    // Migrate editingContent when status suffix changes (_new→_wait etc.)
-    const oldItems = items.value
-    for (const freshItem of fresh) {
-      const oldItem = oldItems.find(o => stem(o.name) === stem(freshItem.name))
-      if (oldItem && oldItem.name !== freshItem.name) {
-        const oldKey = oldItem.name
-        const newKey = freshItem.name
-        if (oldKey in editingContent.value && !(newKey in editingContent.value)) {
-          editingContent.value = { ...editingContent.value, [newKey]: editingContent.value[oldKey] }
-        }
-      }
-    }
+    hydrateDrafts(editingContent, fresh.map(i => ({ key: stem(i.name), content: i.content })))
     for (const item of fresh) {
       const wasProc = Array.from(wasProcessing).some(n => stem(n) === stem(item.name))
       if (wasProc && item.status !== 'processing') {
-        clearDraft(item.name)
+        clearDraft(stem(item.name))
         // Fetch actual chat.md from server to get agent response
         try {
           const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
           if (chatRes.ok) {
             const serverContent = await chatRes.text()
             if (serverContent) {
-              editingContent.value = { ...editingContent.value, [item.name]: serverContent }
+              editingContent.value = { ...editingContent.value, [stem(item.name)]: serverContent }
             }
           }
         } catch { /* silent */ }
@@ -285,7 +274,7 @@ async function loadItems() {
     const res = await fetch('/api/queue')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const fresh: QueueItem[] = await res.json()
-    hydrateDrafts(editingContent, fresh)
+    hydrateDrafts(editingContent, fresh.map(i => ({ key: stem(i.name), content: i.content })))
     items.value = fresh
     initSelected(fresh)
     const proc: Record<string, boolean> = {}
@@ -399,9 +388,9 @@ async function expandItem(name: string) {
 
   const item = items.value.find(i => i.name === name)
   if (!item) return
-  // Initialize editor with the full chat content
-  if (!(name in editingContent.value)) {
-    editingContent.value = { ...editingContent.value, [name]: item.content }
+  // Initialize editor with the full chat content — key by stem, not full name
+  if (!(s in editingContent.value)) {
+    editingContent.value = { ...editingContent.value, [s]: item.content }
   }
   nextTick(() => scrollChatToBottom())
 }
@@ -419,9 +408,10 @@ async function sendChat(name: string) {
   if (!message || processingTask.value[name]) return
 
   // Optimistically add user message to displayed history
-  const currentContent = editingContent.value[name] || ''
+  const s = stem(name)
+  const currentContent = editingContent.value[s] || ''
   const updatedContent = currentContent + `\n\n---\n\n**User:**\n${message}\n`
-  editingContent.value = { ...editingContent.value, [name]: updatedContent }
+  editingContent.value = { ...editingContent.value, [s]: updatedContent }
   chatInputs.value = { ...chatInputs.value, [name]: '' }
 
   // Send via chat endpoint (handles rename + agent internally)
@@ -432,10 +422,10 @@ async function sendChat(name: string) {
   })
   const data = await res.json()
 
-  // Carry optimistic content to the renamed key so it survives auto-refresh
-  // even if server's chat.md hasn't been written yet (race).
-  if (data.processingName && data.processingName !== name) {
-    editingContent.value = { ...editingContent.value, [data.processingName]: updatedContent }
+  // Carry optimistic content under the stable stem key so it survives
+  // auto-refresh even if server's chat.md hasn't been written yet (race).
+  if (data.processingName && stem(data.processingName) !== s) {
+    editingContent.value = { ...editingContent.value, [stem(data.processingName)]: updatedContent }
   }
 
   // Refresh first to get latest content from server, then scroll
@@ -474,14 +464,15 @@ async function executeSingle(name: string) {
   const message = chatInputs.value[name]?.trim()
   if (message) {
     // Append message to chat content via PATCH first
-    const currentContent = editingContent.value[name] || ''
+    const s = stem(name)
+    const currentContent = editingContent.value[s] || ''
     const updatedContent = currentContent ? currentContent + `\n\n---\n\n**User:**\n${message}\n` : `**User:**\n${message}\n`
     await fetch('/api/queue', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: name, content: updatedContent }),
     })
-    editingContent.value = { ...editingContent.value, [name]: updatedContent }
+    editingContent.value = { ...editingContent.value, [s]: updatedContent }
     chatInputs.value = { ...chatInputs.value, [name]: '' }
   }
   // Set status to wait (server won't auto-start — guarded by status !== 'wait')

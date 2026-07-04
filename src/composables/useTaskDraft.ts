@@ -102,19 +102,23 @@ export function clearDraft(key: string) {
 
 /**
  * Hydrate editingContent from localStorage drafts.
+ * `items` is an array of `{ key, content }` tuples — the caller decides
+ * the stable key (e.g. a stem without status suffix) so status transitions
+ * never orphan editing content.
+ *
  * Merges drafts on top of server content so unsaved edits survive refresh.
  */
 export function hydrateDrafts(
   editingContent: Ref<Record<string, string>>,
-  items: { name: string; content: string }[],
+  items: { key: string; content: string }[],
 ) {
   const drafts = loadAll()
   const next = { ...editingContent.value }
-  for (const item of items) {
-    if (drafts[item.name] !== undefined) {
-      next[item.name] = drafts[item.name]
-    } else if (!(item.name in next)) {
-      next[item.name] = item.content
+  for (const { key, content } of items) {
+    if (drafts[key] !== undefined) {
+      next[key] = drafts[key]
+    } else if (!(key in next)) {
+      next[key] = content
     }
   }
   editingContent.value = next

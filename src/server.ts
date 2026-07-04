@@ -634,18 +634,14 @@ function listQueue(): QueueItem[] {
     // Agent status for processing tasks
     let agentStatus: { status: string; pid?: number; elapsed?: number } | null = null
     if (status === 'processing') {
-      // Calculate elapsed seconds from folder timestamp
-      const stem = name.replace(/_(new|wait|done|processing)$/, '')
-      const ts = stem.split('_')[0] // 2026-07-04T08-26-12
+      // Calculate elapsed seconds from .pid file mtime (process start time), not folder creation time
       let elapsed: number | undefined
-      if (ts) {
-        // Fix time separators: dashes → colons (2026-07-04T08-26-12 → 2026-07-04T08:26:12)
-        const fixed = ts.replace(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4')
-        const startMs = new Date(fixed).getTime()
-        if (!isNaN(startMs)) elapsed = Math.floor((Date.now() - startMs) / 1000)
-      }
       const pidPath = resolve(queueDir, name, '.pid')
       if (existsSync(pidPath)) {
+        // Use .pid mtime as the authoritative process start time
+        const pidStat = statSync(pidPath)
+        elapsed = Math.floor((Date.now() - pidStat.mtimeMs) / 1000)
+
         const raw = readFileSync(pidPath, 'utf-8').trim()
         const pid = parseInt(raw, 10)
         if (pid && !isNaN(pid)) {
@@ -655,6 +651,14 @@ function listQueue(): QueueItem[] {
           agentStatus = { status: 'stopped', elapsed }
         }
       } else {
+        // Fallback: compute from folder name timestamp if .pid is missing
+        const stem = name.replace(/_(new|wait|done|processing)$/, '')
+        const ts = stem.split('_')[0]
+        if (ts) {
+          const fixed = ts.replace(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4')
+          const startMs = new Date(fixed).getTime()
+          if (!isNaN(startMs)) elapsed = Math.floor((Date.now() - startMs) / 1000)
+        }
         agentStatus = { status: 'no_pid', elapsed }
       }
     }
@@ -820,6 +824,13 @@ function runTaskChunk(folderName: string) {
     child.on('close', () => {
       clearTimeout(killTimer)
       runningTasks.delete(folderName)
+
+      // If folder was already renamed by script self-cleanup, nothing to do
+      if (!existsSync(folderPath)) {
+        console.log(`[hinge] Task ${folderName} already cleaned up by script`)
+        processNextTask()
+        return
+      }
 
       if (stderr) {
         try { appendFileSync(logPath, `\n[stderr]\n${stderr}\n`, 'utf-8') } catch {}

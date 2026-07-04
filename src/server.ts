@@ -442,25 +442,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  // ── Agent status ──
-  if (pathname === '/api/agent-status') {
-    if (method !== 'GET') { json(res, { error: 'GET only' }, 405); return }
-    const file = url.searchParams.get('file')
-    if (!file) { json(res, { error: 'missing file param' }, 400); return }
-    const statusScript = resolve(process.cwd(), '.hinge', 'status.sh')
-    if (!existsSync(statusScript)) {
-      json(res, { status: 'error', error: 'status.sh not found' }, 500); return
-    }
-    // status.sh takes the full folder name (with _processing suffix)
-    try {
-      const result = await execScript(statusScript, [file])
-      json(res, JSON.parse(result.trim() || '{"status":"error","error":"empty_output"}'))
-    } catch (e: any) {
-      json(res, { status: 'error', error: e.message })
-    }
-    return
-  }
-
   // ── 404 ──
   status(res, 404, 'not found')
   } catch (e: any) {
@@ -560,8 +541,9 @@ function readFilePath(filePath: string): string | null {
 // ── Queue helpers ──────────────────────────────────────────
 
 interface QueueItem {
-  name: string; status: 'wait' | 'done'; content: string
+  name: string; status: 'wait' | 'done' | 'processing'; content: string
   component: string; note: string; url: string; dom: string
+  agentStatus?: { status: string; pid?: number } | null
 }
 
 function appendToQueue(content: string) {
@@ -615,7 +597,24 @@ function listQueue(): QueueItem[] {
       }
       return noteLines.join('\n').trim()
     })()
-    items.push({ name, status, content: content || '', component, note, url, dom })
+    // Agent status for processing tasks
+    let agentStatus: { status: string; pid?: number } | null = null
+    if (status === 'processing') {
+      const pidPath = resolve(queueDir, name, '.pid')
+      if (existsSync(pidPath)) {
+        const raw = readFileSync(pidPath, 'utf-8').trim()
+        const pid = parseInt(raw, 10)
+        if (pid && !isNaN(pid)) {
+          try { process.kill(pid, 0); agentStatus = { status: 'running', pid } }
+          catch { agentStatus = { status: 'stopped' } }
+        } else {
+          agentStatus = { status: 'stopped' }
+        }
+      } else {
+        agentStatus = { status: 'no_pid' }
+      }
+    }
+    items.push({ name, status, content: content || '', component, note, url, dom, agentStatus } as QueueItem)
   }
   items.sort((a, b) => b.name.localeCompare(a.name))
   return items
@@ -861,26 +860,6 @@ function processNextTask() {
   }
 
   runTaskChunk(processingName)
-}
-
-// ── Script runner ──────────────────────────────────────────
-
-function execScript(scriptPath: string, args: string[]): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn('/bin/bash', [scriptPath, ...args], {
-      cwd: process.cwd(),
-      env: { ...process.env },
-      timeout: 5000,
-    })
-    let out = '', err = ''
-    child.stdout.on('data', (d: Buffer) => out += d.toString())
-    child.stderr.on('data', (d: Buffer) => err += d.toString())
-    child.on('close', (code) => {
-      if (code === 0) resolvePromise(out)
-      else reject(new Error(err || `exit ${code}`))
-    })
-    child.on('error', reject)
-  })
 }
 
 // ── Buffer helpers ─────────────────────────────────────────

@@ -176,46 +176,10 @@ for seg in segments:
     print(seg.text)
 " "$AUDIO_FILE" 2>/dev/null`
 
-const SCRIPT_STATUS = `#!/bin/bash
-# status.sh — Check if an agent process is alive
-# Hinge auto-generated — part of agent contract
-#
-# Usage: status.sh <alias>
-# stdin: ignored
-# stdout: JSON {status, pid?, error?}
-#
-# status values:
-#   "running"  — PID exists and process is alive
-#   "stopped"  — PID file exists but process is dead
-#   "no_pid"   — PID file does not exist (never started or cleaned up)
-
-ALIAS="$1"
-DIR="$(dirname "$0")"
-PID_FILE="$DIR/$ALIAS/.pid"
-
-if [ ! -f "$PID_FILE" ]; then
-  echo '{"status":"no_pid"}'
-  exit 0
-fi
-
-PID=$(tr -d ' \t\n\r' < "$PID_FILE")
-
-if [ -z "$PID" ]; then
-  echo '{"status":"stopped","pid":null,"error":"empty_pid"}'
-  exit 0
-fi
-
-if kill -0 "$PID" 2>/dev/null; then
-  echo "{\"status\":\"running\",\"pid\":$PID}"
-else
-  echo "{\"status\":\"stopped\",\"pid\":$PID,\"error\":\"process_dead\"}"
-fi`
-
 const SCRIPTS_TO_ENSURE: Record<string, string> = {
   'new-session.sh': SCRIPT_NEW_SESSION,
   'continue-session.sh': SCRIPT_CONTINUE_SESSION,
   'whisper.sh': SCRIPT_WHISPER,
-  'status.sh': SCRIPT_STATUS,
 }
 
 function ensureScripts() {

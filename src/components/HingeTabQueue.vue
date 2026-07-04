@@ -14,6 +14,7 @@ interface QueueItem {
   note: string
   url: string
   dom: string
+  agentStatus?: { status: string; pid?: number } | null
 }
 
 interface ChatMessage {
@@ -247,19 +248,15 @@ async function refreshItems() {
       agentStatus.value = cleaned
     }
 
-    // Fetch agent status for processing tasks (non-blocking, best-effort)
-    for (const name of Object.keys(next)) {
-      fetch(`/api/agent-status?file=${encodeURIComponent(name)}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.status) {
-            agentStatus.value = {
-              ...agentStatus.value,
-              [name]: { status: data.status, checkedAt: Date.now() }
-            }
-          }
-        })
-        .catch(() => { /* ignore */ })
+    // Refresh agent status from queue response (server includes agentStatus for processing tasks)
+    const statusUpdates: Record<string, { status: string; checkedAt: number }> = {}
+    for (const item of fresh) {
+      if (item.agentStatus && item.agentStatus.status) {
+        statusUpdates[item.name] = { status: item.agentStatus.status, checkedAt: Date.now() }
+      }
+    }
+    if (Object.keys(statusUpdates).length > 0) {
+      agentStatus.value = { ...agentStatus.value, ...statusUpdates }
     }
 
     // Scroll to bottom if expanded item's status changed or content updated

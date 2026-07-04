@@ -637,20 +637,6 @@ function openPromptModal() {
 
             <div class="input-actions">
               <button
-                class="drawer-btn drawer-btn--add"
-                :disabled="!note.trim()"
-                @click="onAdd"
-              >
-                {{ editingFile ? lang.saveEdit : lang.add }}
-              </button>
-              <button
-                v-if="editingFile"
-                class="drawer-btn drawer-btn--cancel"
-                @click="editingFile = ''; editingNoteRef = ''"
-              >
-                ✕
-              </button>
-              <button
                 class="mic-btn"
                 :class="{
                   'mic-btn--recording': recording,
@@ -664,8 +650,23 @@ function openPromptModal() {
                 >
                 {{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}
               </button>
-              <HingeAttach v-if="editingFile" :folder="editingFile" />
-              <div class="segmented-btn">
+              <div class="input-actions__group">
+                <button
+                  class="drawer-btn drawer-btn--add"
+                  :disabled="!note.trim()"
+                  @click="onAdd"
+                >
+                  {{ editingFile ? lang.saveEdit : lang.add }}
+                </button>
+                <button
+                  v-if="editingFile"
+                  class="drawer-btn drawer-btn--cancel"
+                  @click="editingFile = ''; editingNoteRef = ''"
+                >
+                  ✕
+                </button>
+                <HingeAttach v-if="editingFile" :folder="editingFile" />
+                <div class="segmented-btn">
                 <button
                   class="segmented-btn__main"
                   :class="'segmented-btn__main--' + execMode"
@@ -687,6 +688,7 @@ function openPromptModal() {
                     @click="setMode(mode)"
                   >{{ modeLabels[mode] }}</button>
                 </div>
+              </div>
               </div>
             </div>
 
@@ -1143,6 +1145,12 @@ function openPromptModal() {
   display: flex;
   gap: 8px;
   justify-content: space-between;
+}
+
+.input-actions__group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .drawer-btn--add {

@@ -3,6 +3,7 @@ import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
 import { hydrateDrafts, clearDraft } from '../composables/useTaskDraft'
 import { useI18n } from '../composables/useI18n'
+import { shortenOutput } from '../utils/shortenOutput'
 
 type ExecMode = 'execute' | 'stop' | 'delete'
 
@@ -553,7 +554,7 @@ async function executeSingle(name: string) {
               >
                 <div class="chat-msg__body">
                   <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? lang.user : lang.assistant }}</div>
-                  <div class="chat-msg__text">{{ msg.content }}</div>
+                  <div class="chat-msg__text">{{ msg.role === 'assistant' ? shortenOutput(msg.content) : msg.content }}</div>
                 </div>
               </div>
             </div>

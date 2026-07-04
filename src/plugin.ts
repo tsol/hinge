@@ -62,14 +62,20 @@ if [ -n "$SESSION_ID" ]; then
 fi
 echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$"
 # ── Self-cleanup: survives Node.js crash ──
-FOLDER="$DIR/${ALIAS}_processing"
+FOLDER="$DIR/\${ALIAS}_processing"
 CHAT_MD="$FOLDER/chat.md"
-OUTPUT_CLEAN=$(echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$")
+OUTPUT_CLEAN=$(echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$")
 if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT_CLEAN" ]; then
-  printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "$OUTPUT_CLEAN" >> "$CHAT_MD"
+  {
+    echo ""
+    echo "---"
+    echo ""
+    echo "**Assistant:**"
+    echo "$OUTPUT_CLEAN"
+  } >> "$CHAT_MD"
 fi
 rm -f "$FOLDER/.pid"
-mv "$FOLDER" "$DIR/${ALIAS}_done" 2>/dev/null || true`
+mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true`
 
 const SCRIPT_CONTINUE_SESSION = `#!/bin/bash
 # continue-session.sh — Continue an existing Hermes session, or create new if not found
@@ -134,14 +140,20 @@ else
 fi
 echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$"
 # ── Self-cleanup: survives Node.js crash ──
-FOLDER="$DIR/${ALIAS}_processing"
+FOLDER="$DIR/\${ALIAS}_processing"
 CHAT_MD="$FOLDER/chat.md"
 OUTPUT_CLEAN=$(echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$")
 if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT_CLEAN" ]; then
-  printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "$OUTPUT_CLEAN" >> "$CHAT_MD"
+  {
+    echo ""
+    echo "---"
+    echo ""
+    echo "**Assistant:**"
+    echo "$OUTPUT_CLEAN"
+  } >> "$CHAT_MD"
 fi
 rm -f "$FOLDER/.pid"
-mv "$FOLDER" "$DIR/${ALIAS}_done" 2>/dev/null || true`
+mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true`
 
 const SCRIPT_WHISPER = `#!/bin/bash
 # whisper.sh — Transcribe audio file to text

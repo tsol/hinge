@@ -266,11 +266,16 @@ async function onExecuteByMode() {
     await fetch('/api/queue/run', { method: 'POST' })
   } else if (execMode.value === 'stop') {
     for (const name of selected) {
-      await fetch('/api/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })
+      try {
+        const res = await fetch('/api/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+        if (!res.ok) console.warn(`[hinge] Stop failed for ${name}: HTTP ${res.status}`)
+      } catch (e) {
+        console.error(`[hinge] Stop fetch error for ${name}:`, e)
+      }
     }
   } else if (execMode.value === 'delete') {
     for (const name of selected) {

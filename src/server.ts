@@ -21,22 +21,50 @@ import { loadConfig, resolveAgentScripts, saveConfig, readPrompt } from './utils
 // ── Shared state ──────────────────────────────────────────
 const runningTasks = new Set<string>()
 const taskQueue: string[] = []
-let apiServer: http.Server | null = null
+
+// Store HTTP server reference globally so it survives Vite HMR module re-evaluation
+const GLOBAL_KEY = '__hinge_api_server__'
+function getApiServer(): http.Server | null {
+  return (globalThis as any)[GLOBAL_KEY] ?? null
+}
+function setApiServer(s: http.Server | null) {
+  if (s) (globalThis as any)[GLOBAL_KEY] = s
+  else delete (globalThis as any)[GLOBAL_KEY]
+}
+
+// Catch-all for process-level errors so a crash doesn't orphan running tasks
+process.on('uncaughtException', (err) => {
+  console.error('[hinge] uncaughtException:', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[hinge] unhandledRejection:', reason)
+})
 
 // ── Public entry point ────────────────────────────────────
 export function startHingeServer(port = 5177): http.Server {
-  if (apiServer) return apiServer
-  apiServer = http.createServer(handleRequest)
-  apiServer.listen(port, () => {
+  const existing = getApiServer()
+  if (existing) return existing
+  const server = http.createServer(handleRequest)
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[hinge] Port ${port} already in use — server from previous cycle still alive, reusing`)
+      setApiServer(null)
+      return
+    }
+    console.error('[hinge] HTTP server error:', err)
+  })
+  server.listen(port, () => {
     console.log(`[hinge-server] Listening on :${port}`)
   })
-  return apiServer
+  setApiServer(server)
+  return server
 }
 
 export function stopHingeServer(): void {
-  if (apiServer) {
-    try { apiServer.close() } catch { /* ignore */ }
-    apiServer = null
+  const server = getApiServer()
+  if (server) {
+    try { server.close() } catch { /* ignore */ }
+    setApiServer(null)
   }
 }
 
@@ -347,6 +375,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         const p = resolve(queueDir, c)
         if (existsSync(p)) { foundName = c; break }
       }
+
+      const logLine = `[cancel] name="${name}" stem="${stemName}" found="${foundName||'none'}"`
+      try { appendFileSync(resolve(queueDir, '.cancel.log'), `${new Date().toISOString()} ${logLine}\n`) } catch {}
+
       if (!foundName) { json(res, { ok: true }); return }
 
       const folderPath = resolve(queueDir, foundName)
@@ -369,10 +401,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         try { renameSync(folderPath, resolve(queueDir, newName)) } catch { /* ignore */ }
         // Free up a slot — start next task
         processNextTask()
+        try { appendFileSync(resolve(queueDir, '.cancel.log'), `  → _processing → _new, processNextTask()\n`) } catch {}
       } else {
         // _wait or _new → user cancelled, archive to _done
         const doneName = `${stemName}_done`
         try { renameSync(folderPath, resolve(queueDir, doneName)) } catch { /* ignore */ }
+        try { appendFileSync(resolve(queueDir, '.cancel.log'), `  → _wait/_new → _done, NO processNextTask\n`) } catch {}
         // Don't call processNextTask — nothing was running, don't start the task user just cancelled
       }
       json(res, { ok: true })
@@ -605,7 +639,9 @@ function listQueue(): QueueItem[] {
       const ts = stem.split('_')[0] // 2026-07-04T08-26-12
       let elapsed: number | undefined
       if (ts) {
-        const startMs = new Date(ts).getTime()
+        // Fix time separators: dashes → colons (2026-07-04T08-26-12 → 2026-07-04T08:26:12)
+        const fixed = ts.replace(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4')
+        const startMs = new Date(fixed).getTime()
         if (!isNaN(startMs)) elapsed = Math.floor((Date.now() - startMs) / 1000)
       }
       const pidPath = resolve(queueDir, name, '.pid')

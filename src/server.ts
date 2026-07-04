@@ -23,13 +23,20 @@ const runningTasks = new Set<string>()
 const taskQueue: string[] = []
 
 // Store HTTP server reference globally so it survives Vite HMR module re-evaluation
-const GLOBAL_KEY = '__hinge_api_server__'
-function getApiServer(): http.Server | null {
-  return (globalThis as any)[GLOBAL_KEY] ?? null
+// Key includes port so each project has its OWN server — projects don't share
+const GLOBAL_KEY_PREFIX = '__hinge_api_server_'
+
+function globalKey(port: number): string {
+  return GLOBAL_KEY_PREFIX + port
 }
-function setApiServer(s: http.Server | null) {
-  if (s) (globalThis as any)[GLOBAL_KEY] = s
-  else delete (globalThis as any)[GLOBAL_KEY]
+
+function getApiServer(port: number): http.Server | null {
+  return (globalThis as any)[globalKey(port)] ?? null
+}
+
+function setApiServer(port: number, s: http.Server | null) {
+  if (s) (globalThis as any)[globalKey(port)] = s
+  else delete (globalThis as any)[globalKey(port)]
 }
 
 // Catch-all for process-level errors so a crash doesn't orphan running tasks
@@ -42,13 +49,13 @@ process.on('unhandledRejection', (reason) => {
 
 // ── Public entry point ────────────────────────────────────
 export function startHingeServer(port = 5177): http.Server {
-  const existing = getApiServer()
+  const existing = getApiServer(port)
   if (existing) return existing
   const server = http.createServer(handleRequest)
   server.on('error', (err: any) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`[hinge] Port ${port} already in use — server from previous cycle still alive, reusing`)
-      setApiServer(null)
+      setApiServer(port, null)
       return
     }
     console.error('[hinge] HTTP server error:', err)
@@ -56,15 +63,15 @@ export function startHingeServer(port = 5177): http.Server {
   server.listen(port, () => {
     console.log(`[hinge-server] Listening on :${port}`)
   })
-  setApiServer(server)
+  setApiServer(port, server)
   return server
 }
 
-export function stopHingeServer(): void {
-  const server = getApiServer()
+export function stopHingeServer(port = 5177): void {
+  const server = getApiServer(port)
   if (server) {
     try { server.close() } catch { /* ignore */ }
-    setApiServer(null)
+    setApiServer(port, null)
   }
 }
 

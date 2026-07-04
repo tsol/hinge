@@ -322,7 +322,7 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
 
     closeBundle() {
       if (isServerRunning()) {
-        import('./server').then(({ stopHingeServer }) => stopHingeServer())
+        import('./server').then(({ stopHingeServer }) => stopHingeServer(port))
         resetServerState()
       }
     },

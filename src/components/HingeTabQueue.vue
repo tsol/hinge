@@ -310,16 +310,13 @@ function statusIcon(status: string) {
   return '📥'
 }
 
-/** Label for the processing status bar: "Processing… (3s)" or "⚠ Stopped (3s)" */
+/** Label for the processing status bar */
 function processingStatusLabel(name: string): string {
   const a = agentStatus.value[name]
   const l = lang.value
-  if (!a) return l.processing
-  const seconds = a.checkedAt ? Math.floor((Date.now() - a.checkedAt) / 1000) : 0
-  const secLabel = seconds <= 1 ? '1s' : `${seconds}s`
-  if (a.status === 'running') return `${l.processing} (${secLabel})`
-  if (a.status === 'stopped') return `⚠ ${l.stopped} (${secLabel})`
-  return `${l.processing} (${secLabel})`
+  if (!a || a.status === 'running' || a.status === 'no_pid') return l.processing
+  if (a.status === 'stopped') return `⚠ ${l.stopped}`
+  return l.processing
 }
 
 /** Extract first meaningful line from content (fallback when no header found) */

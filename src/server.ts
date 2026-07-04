@@ -798,7 +798,6 @@ function runTaskChunk(folderName: string) {
     scriptType = 'continue'
   }
 
-  const timeout = 300_000
   const logPath = resolve(folderPath, 'chat.log')
   try { appendFileSync(logPath, `=== Agent run started: ${new Date().toISOString()} ===\n`, 'utf-8') } catch { /* ignore */ }
 
@@ -826,10 +825,7 @@ function runTaskChunk(folderName: string) {
       try { appendFileSync(logPath, d.toString(), 'utf-8') } catch { /* ignore */ }
     })
 
-    const killTimer = setTimeout(() => { try { child.kill('SIGTERM') } catch { /* ignore */ } }, timeout)
-
     child.on('close', () => {
-      clearTimeout(killTimer)
       runningTasks.delete(folderName)
 
       // If folder was already renamed by script self-cleanup, nothing to do
@@ -869,7 +865,6 @@ function runTaskChunk(folderName: string) {
 
     child.on('error', (err) => {
       console.error(`[hinge] Agent spawn error for ${folderName}:`, err)
-      clearTimeout(killTimer)
       runningTasks.delete(folderName)
       try { unlinkSync(resolve(folderPath, '.pid')) } catch {}
       try {

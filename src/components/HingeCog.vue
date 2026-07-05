@@ -465,16 +465,14 @@ const wrapStyle = computed(() => ({
 }
 
 .cog-mode-btn {
-  flex: 1 !important;
-  display: flex !important;
+  display: inline-flex !important;
   position: relative !important;
   border-radius: 4px !important;
   overflow: visible !important;
+  margin-left: auto !important;
 }
 
 .cog-mode-btn__main {
-  flex: 1 !important;
-  min-width: 0 !important;
   height: 28px !important;
   padding: 0 8px !important;
   border: 1px solid #3a3a5a !important;

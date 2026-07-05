@@ -93,10 +93,25 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 const { toasts: _t, success, error } = useToast()
 
 /** Truncate first words of note to one line */
-function firstWords(note: string, maxLen = 50): string {
+function firstWords(note: string, maxLen = 60): string {
   const oneLine = note.replace(/\s+/g, ' ').trim()
   if (oneLine.length <= maxLen) return oneLine
   return oneLine.slice(0, maxLen).trimEnd() + '…'
+}
+
+/** Clean up agent response for toast body: strip code fences, diff headers, condense */
+function prettifyResponse(text: string): string {
+  return text
+    .replace(/\r/g, '')                                   // normalize line endings
+    .replace(/^```[\s\S]*?```[ \t]*\n?/gm, '')           // strip code blocks
+    .replace(/^--- .+\n/gm, '')                           // strip diff --- a/file headers
+    .replace(/^\+\+\+ .+\n/gm, '')                        // strip diff +++ b/file headers
+    .replace(/^@@ .+@@.*\n/gm, '')                        // strip diff hunk headers
+    .replace(/^\s*┊.*\n/gm, '')                           // strip ┊ review diff etc
+    .replace(/^a\/.*→.*\n/gm, '')                         // strip a/file → b/file
+    .replace(/^[-+]\S.*\n/gm, '')                         // strip diff +/- content lines
+    .replace(/\n{3,}/g, '\n\n')                           // collapse blank lines
+    .trim()
 }
 
 async function pollQueue() {
@@ -126,7 +141,7 @@ async function pollQueue() {
               // Extract last **Assistant:** section
               const lastIdx = text.lastIndexOf('**Assistant:**')
               if (lastIdx !== -1) {
-                detail = text.slice(lastIdx + '**Assistant:**'.length).replace(/^[\s\n]*/, '').replace(/[\s\n]*$/, '').trim()
+                detail = prettifyResponse(text.slice(lastIdx + '**Assistant:**'.length))
               }
             }
           } catch { /* silent */ }

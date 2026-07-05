@@ -683,26 +683,25 @@ function listQueue(): QueueItem[] {
     const url = content.match(/^### Page: (.+)/m)?.[1] ?? ''
     const dom = content.match(/^DOM: (.+)/m)?.[1] ?? ''
     const note = (() => {
-      // 1) Try last **User:** section (from follow-up messages)
-      const parts = content.split(/\n---\n/)
-      for (let i = parts.length - 1; i >= 0; i--) {
-        const m = parts[i].match(/^\*\*User:\*\*\n([\s\S]*)/)
-        if (m) return m[1].trim()
+      // 1) Last **User:** message — take next line(s) until blank or **Assistant:**
+      const userIdx = content.lastIndexOf('**User:**\n')
+      if (userIdx !== -1) {
+        const after = content.slice(userIdx + '**User:**\n'.length)
+        const end = after.search(/\n\n|\*\*Assistant:\*\*/)
+        return (end === -1 ? after.trim() : after.slice(0, end).trim())
       }
-      // 2) Fall back to initial ### section note
-      const sections = content.split(/^### /m)
-      if (sections.length <= 1) return ''
-      const last = sections[sections.length - 1]
-      const afterFields = last.split('\n')
-      let inFields = true
-      const noteLines: string[] = []
-      for (const line of afterFields.slice(1)) {
-        if (inFields && /^[A-Za-z]\w+: /.test(line)) continue
-        if (inFields && line.trim() === '') { inFields = false; continue }
-        inFields = false
-        noteLines.push(line)
+      // 2) No follow-ups: strip ### headers & fields, return first meaningful text
+      const beforeAgent = content.split(/\n---\n/)[0]
+      const textLines: string[] = []
+      let inHeader = false
+      for (const line of beforeAgent.split('\n')) {
+        if (/^### (Page|Component|File):/.test(line)) { inHeader = true; continue }
+        if (inHeader && /^[A-Za-z]\w+: /.test(line)) continue
+        if (inHeader && line.trim() === '') { inHeader = false; continue }
+        inHeader = false
+        textLines.push(line)
       }
-      return noteLines.join('\n').trim()
+      return textLines.filter(l => l.trim()).join('\n').trim()
     })()
     // Detect failed tasks
     const errorPath = resolve(queueDir, name, '.error')

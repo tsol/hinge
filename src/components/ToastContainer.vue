@@ -2,12 +2,6 @@
 import { useToast } from '../composables/useToast'
 
 const { toasts, dismiss, toggleExpand } = useToast()
-
-function detailPreview(text: string, maxLen = 80): string {
-  const oneLine = text.replace(/\s+/g, ' ').trim()
-  if (oneLine.length <= maxLen) return oneLine
-  return oneLine.slice(0, maxLen).trimEnd() + '…'
-}
 </script>
 
 <template>
@@ -29,10 +23,7 @@ function detailPreview(text: string, maxLen = 80): string {
             class="toast__detail"
             :class="{ 'toast__detail--expanded': t.expanded }"
             @click="toggleExpand(t.id)"
-          >
-            <template v-if="t.expanded">{{ t.detail }}</template>
-            <template v-else>{{ detailPreview(t.detail) }}</template>
-          </div>
+          >{{ t.detail }}</div>
         </div>
       </TransitionGroup>
     </div>

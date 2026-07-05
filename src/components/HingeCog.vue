@@ -8,6 +8,7 @@ import {
   getAllHighlightEntries,
   setHighlightEntry,
 } from '../composables/useElementHighlights'
+import HingeMic from './HingeMic.vue'
 
 const props = defineProps<{
   open: boolean
@@ -32,46 +33,6 @@ defineEmits<{
 const modalOpen = ref(false)
 const taskText = ref('')
 const circularIdx = ref(0)
-
-// ── Mic ──
-const recording = ref(false)
-const transcribing = ref(false)
-let mediaRecorder: MediaRecorder | null = null
-let audioChunks: Blob[] = []
-
-function startRecording() {
-  if (recording.value) return
-  audioChunks = []
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data) }
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop())
-      if (audioChunks.length === 0) return
-      transcribing.value = true
-      const blob = new Blob(audioChunks, { type: 'audio/webm' })
-      try {
-        const res = await fetch('/api/transcribe', { method: 'POST', body: blob })
-        const { text, error: err } = await res.json()
-        if (err) throw new Error(err)
-        if (text) {
-          taskText.value = (taskText.value ? taskText.value + '\n' : '') + text + '\n'
-        }
-      } catch { /* silent */ }
-      transcribing.value = false
-      audioChunks = []
-    }
-    mediaRecorder.start()
-    recording.value = true
-  }).catch(() => { /* no mic permission */ })
-}
-
-function stopRecording() {
-  if (!recording.value || !mediaRecorder) return
-  recording.value = false
-  mediaRecorder.stop()
-  mediaRecorder = null
-}
 
 // ── Circular selector ──
 
@@ -125,6 +86,11 @@ watch(() => props.candidateLabels.length, () => {
 
 // ── Mode split-button (dropdown, like HingePanel group ops) ──
 const showModeDropdown = ref(false)
+
+function onTranscribed(text: string) {
+  taskText.value = (taskText.value ? taskText.value + '\n' : '') + text + '\n'
+}
+
 const modeDropdownUp = ref(false)
 const chevronRef = ref<HTMLElement | null>(null)
 
@@ -373,15 +339,7 @@ const wrapStyle = computed(() => ({
         ></textarea>
 
         <div class="cog-modal__actions">
-          <button
-            class="cog-modal__mic"
-            :class="{ 'cog-modal__mic--recording': recording, 'cog-modal__mic--transcribing': transcribing }"
-            :disabled="transcribing"
-            @pointerdown.prevent="!transcribing && startRecording()"
-            @pointerup.prevent="stopRecording"
-            @pointerleave="recording && stopRecording()"
-            :title="recording ? 'Release to send' : transcribing ? '⏳' : '🎤'"
-          >{{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}</button>
+          <HingeMic @transcribed="onTranscribed" />
 
           <div class="cog-mode-btn">
             <button
@@ -603,28 +561,6 @@ const wrapStyle = computed(() => ({
   color: #58a6ff !important;
   font-weight: 700 !important;
   background: rgba(88, 166, 255, 0.08) !important;
-}
-
-/* ── Mic ── */
-.cog-modal__mic {
-  height: 28px !important;
-  border: none !important;
-  border-radius: 50% !important;
-  background: #2a2a4a !important;
-  color: #e0e0e0 !important;
-  cursor: pointer !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  font-size: 14px !important;
-  padding: 0 !important;
-  flex-shrink: 0 !important;
-}
-.cog-modal__mic--recording {
-  background: #da3633 !important;
-}
-.cog-modal__mic--transcribing {
-  opacity: 0.6 !important;
 }
 
 /* ── Circular selector ── */

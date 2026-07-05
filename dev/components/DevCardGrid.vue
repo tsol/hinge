@@ -7,7 +7,7 @@
       :title="card.title"
       :desc="card.desc"
       :highlighted="i === highlightedIndex"
-      :background="i === 3 ? 'pink' : undefined"
+      :background="i === 3 ? 'blue' : undefined"
       @select="$emit('selectCard', i)"
     />
 

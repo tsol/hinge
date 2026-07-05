@@ -6,7 +6,10 @@ import type { HingeConfig, AgentAction, AgentScripts } from '../types/config'
 // User overrides via .hinge/prompt.md
 export const DEFAULT_PROMPT_TEXT = `# Hinge Panel — {{project_type}} project
 
-Context: full task description in conversation history.`
+Context: full task description in conversation history.
+
+## Instructions
+- If you need to ask a clarifying question — just ask it directly in your response and finish. Do not use the clarify tool (there is no human to answer in non-interactive mode).`
 
 // ── Defaults ──────────────────────────────────────────────
 

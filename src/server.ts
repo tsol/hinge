@@ -791,6 +791,11 @@ function runTaskChunk(folderName: string) {
 
   if (isFirstRun) {
     agentInput = injectAttachments(folderPath, content)
+    // Prepend system prompt as first message — instructs agent on async mode
+    const prompt = readPrompt()
+    if (prompt) {
+      agentInput = prompt + '\n\n---\n\n' + agentInput
+    }
     scriptType = 'new'
     try { writeFileSync(sessionMarker, alias, 'utf-8') } catch { /* ignore */ }
   } else {

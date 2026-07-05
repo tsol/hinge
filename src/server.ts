@@ -590,9 +590,8 @@ function recoverOrphanedTasks() {
   try { entries = readdirSync(queueDir, { withFileTypes: true }) as Dirent[] } catch { return }
 
   const orphans = entries.filter(e => e.isDirectory() && e.name.endsWith('_processing'))
-  if (orphans.length === 0) return
-
-  console.log(`[hinge] Found ${orphans.length} orphaned _processing tasks — recovering...`)
+  if (orphans.length > 0) {
+    console.log(`[hinge] Found ${orphans.length} orphaned _processing tasks — recovering...`)
   for (const e of orphans) {
     const folderPath = resolve(queueDir, e.name)
     const pidPath = resolve(folderPath, '.pid')
@@ -630,8 +629,9 @@ function recoverOrphanedTasks() {
       runningTasks.add(e.name)
     }
   }
+  }
 
-  // Process next waiting task if any slots freed
+  // Process next waiting task — always, even if no orphans found
   processNextTask()
 }
 

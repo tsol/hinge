@@ -207,7 +207,7 @@ CODE=$?
 if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT" ]; then
     printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "$OUTPUT" >> "$CHAT_MD"
 fi
-echo "$OUTPUT"
+echo "$OUTPUT" || true
 rm -f "$PID_FILE"
 mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
 exit $CODE`

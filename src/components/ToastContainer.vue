@@ -16,7 +16,6 @@ const { toasts, dismiss } = useToast()
           @click="dismiss(t.id)"
         >
           <div class="toast__header">
-            <span class="toast__icon">{{ t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : 'ℹ️' }}</span>
             <span class="toast__msg">{{ t.message }}</span>
             <button class="toast__close">✕</button>
           </div>
@@ -31,74 +30,75 @@ const { toasts, dismiss } = useToast()
 .toast-container {
   position: fixed !important;
   bottom: 16px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
+  left: 0 !important;
+  right: 0 !important;
   z-index: 200000 !important;
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
   gap: 8px !important;
   pointer-events: none !important;
-  max-width: 90vw !important;
+  padding: 0 12px !important;
 }
 
 .toast {
   pointer-events: auto !important;
   background: #1c1c3a !important;
-  border: 1px solid #3a3a5a !important;
   border-radius: 8px !important;
-  padding: 8px 12px !important;
-  min-width: 240px !important;
-  max-width: 480px !important;
+  padding: 12px 16px !important;
+  width: 100% !important;
+  max-width: 600px !important;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
   cursor: pointer !important;
   transition: transform 0.2s, opacity 0.2s !important;
 }
 
 .toast--success {
-  border-color: #238636 !important;
+  background: #1a4a1a !important;
 }
 
 .toast--error {
-  border-color: #da3633 !important;
+  background: #4a1a1a !important;
 }
 
 .toast__header {
   display: flex !important;
   align-items: center !important;
-  gap: 6px !important;
-}
-
-.toast__icon {
-  flex-shrink: 0 !important;
-  font-size: 14px !important;
+  gap: 8px !important;
 }
 
 .toast__msg {
   flex: 1 !important;
-  font-size: 12px !important;
+  font-size: 14px !important;
   font-weight: 600 !important;
   color: #e0e0e0 !important;
-  line-height: 1.3 !important;
+  line-height: 1.4 !important;
 }
 
 .toast__close {
   flex-shrink: 0 !important;
   border: none !important;
   background: transparent !important;
-  color: #8b949e !important;
+  color: rgba(255,255,255,0.5) !important;
   cursor: pointer !important;
-  font-size: 10px !important;
+  font-size: 12px !important;
   padding: 2px !important;
 }
 
 .toast__detail {
-  margin-top: 4px !important;
-  font-size: 11px !important;
-  color: #8b949e !important;
+  margin-top: 6px !important;
+  font-size: 12px !important;
+  color: rgba(255,255,255,0.7) !important;
   line-height: 1.4 !important;
   max-height: 60px !important;
   overflow: hidden !important;
+}
+
+/* Full width on mobile */
+@media (max-width: 480px) {
+  .toast {
+    max-width: 100% !important;
+  }
 }
 
 /* Transition */

@@ -26,17 +26,20 @@
     </section>
 
     <Hinge />
+    <ToastContainer />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import Hinge from '../src/Hinge.vue'
 import DevHeader from './components/DevHeader.vue'
 import DevCardGrid from './components/DevCardGrid.vue'
 import DevList from './components/DevList.vue'
 import DevFooter from './components/DevFooter.vue'
 import NonBlockBtn from '../src/components/NonBlockBtn.vue'
+import ToastContainer from '../src/components/ToastContainer.vue'
+import { useToast } from '../src/composables/useToast'
 interface CardItem { title: string; desc: string }
 interface NestedItem { name: string; details: string[] }
 interface NestedData { label: string; items: NestedItem[] }
@@ -81,6 +84,18 @@ const highlightedLabel = computed(() => {
 const activeLabel = computed(() => {
   const i = items[activeIndex.value]
   return i ? `${i.badge} · ${i.label} (item ${activeIndex.value + 1})` : '—'
+})
+
+const { success } = useToast()
+let cycleTimer: ReturnType<typeof setInterval> | null = null
+
+watch(highlightedIndex, (idx) => {
+  if (idx === 3 && !cycleTimer) {
+    success('🔄 Карточка D: циклическое переключение запущено')
+    cycleTimer = setInterval(() => {
+      highlightedIndex.value = (highlightedIndex.value + 1) % 4
+    }, 1200)
+  }
 })
 </script>
 

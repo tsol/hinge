@@ -15,8 +15,8 @@ export function useToast() {
   function show(message: string, type: Toast['type'] = 'info', detail?: string) {
     const id = nextId++
     toasts.value = [...toasts.value, { id, message, type, detail }]
-    // Auto-dismiss after 6s
-    setTimeout(() => dismiss(id), 6000)
+    // Auto-dismiss after 10s
+    setTimeout(() => dismiss(id), 10000)
   }
 
   function dismiss(id: number) {

@@ -1,6 +1,6 @@
 <template>
   <header class="dev-header">
-    <h1>Hinge Playground</h1>
+    <h1>Hinge Sandbox</h1>
     <p class="dev-sub">
       Многоуровневое тестирование. Тапай на шестерёнку — переключай компоненты.
     </p>

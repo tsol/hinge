@@ -1,5 +1,9 @@
 <template>
-  <div class="dev-card" :class="{ 'dev-card--highlighted': highlighted }">
+  <div
+    class="dev-card"
+    :class="{ 'dev-card--highlighted': highlighted }"
+    :style="bgStyle"
+  >
     <h3>{{ title }}</h3>
     <p>{{ desc }}</p>
     <DevCardButton label="Выделить" @select="$emit('select')" />
@@ -7,12 +11,15 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import DevCardButton from './DevCardButton.vue'
-defineProps<{
+const props = defineProps<{
   title: string
   desc: string
   highlighted: boolean
+  background?: string
 }>()
+const bgStyle = computed(() => props.background ? { background: props.background } : undefined)
 defineEmits<{ select: [] }>()
 </script>
 

@@ -72,15 +72,49 @@ function stopRecording() {
   padding: 0 !important;
   flex-shrink: 0 !important;
   width: 28px !important;
+  transition: background 0.15s !important;
 }
 .hinge-mic--recording {
   background: #da3633 !important;
+  animation: mic-record-pulse 0.8s ease-in-out infinite !important;
 }
 .hinge-mic--transcribing {
-  opacity: 0.6 !important;
+  background: #1f6feb !important;
+  opacity: 0.8 !important;
+  animation: mic-transcribe-spin 1s ease-in-out infinite !important;
 }
 .hinge-mic:disabled {
-  opacity: 0.4;
+  opacity: 0.6;
   cursor: default;
+}
+
+@keyframes mic-record-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.6);
+  }
+  50% {
+    transform: scale(0.82);
+    box-shadow: 0 0 0 6px rgba(218, 54, 51, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(218, 54, 51, 0);
+  }
+}
+
+@keyframes mic-transcribe-spin {
+  0% {
+    transform: scale(1) rotate(0deg);
+  }
+  25% {
+    transform: scale(0.88) rotate(-10deg);
+  }
+  75% {
+    transform: scale(0.88) rotate(10deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
 }
 </style>

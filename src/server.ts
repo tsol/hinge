@@ -14,6 +14,7 @@ import {
   writeFileSync, appendFileSync, unlinkSync, renameSync,
   rmSync, statSync,
 } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { resolve, relative, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 import { loadConfig, resolveAgentScripts, saveConfig, readPrompt } from './utils/config'
@@ -62,6 +63,8 @@ export function startHingeServer(port = 5177): http.Server {
   })
   server.listen(port, () => {
     console.log(`[hinge-server] Listening on :${port}`)
+    // Recover orphaned processing tasks after server restart/reload
+    recoverOrphanedTasks()
   })
   setApiServer(port, server)
   return server
@@ -579,6 +582,59 @@ function readFilePath(filePath: string): string | null {
   try { return readFileSync(abs, 'utf-8') } catch { return null }
 }
 
+// ── Recovery: handle orphaned _processing tasks after server restart ──
+function recoverOrphanedTasks() {
+  const queueDir = resolve(process.cwd(), '.hinge')
+  if (!existsSync(queueDir)) return
+  let entries
+  try { entries = readdirSync(queueDir, { withFileTypes: true }) as Dirent[] } catch { return }
+
+  const orphans = entries.filter(e => e.isDirectory() && e.name.endsWith('_processing'))
+  if (orphans.length === 0) return
+
+  console.log(`[hinge] Found ${orphans.length} orphaned _processing tasks — recovering...`)
+  for (const e of orphans) {
+    const folderPath = resolve(queueDir, e.name)
+    const pidPath = resolve(folderPath, '.pid')
+    let pidDead = false
+
+    if (existsSync(pidPath)) {
+      try {
+        const raw = readFileSync(pidPath, 'utf-8').trim()
+        const pid = parseInt(raw, 10)
+        if (pid && !isNaN(pid)) {
+          try { process.kill(pid, 0); /* alive */ } catch { pidDead = true }
+        } else {
+          pidDead = true
+        }
+      } catch { pidDead = true }
+    } else {
+      pidDead = true
+    }
+
+    if (pidDead) {
+      // Agent process is gone — move to _done so next task can start
+      try {
+        unlinkSync(pidPath)
+      } catch { /* ignore */ }
+      const doneName = e.name.replace('_processing', '_done')
+      try {
+        renameSync(folderPath, resolve(queueDir, doneName))
+        console.log(`[hinge] Recovered orphan: ${e.name} → ${doneName}`)
+      } catch (err) {
+        console.error(`[hinge] Failed to recover ${e.name}:`, err)
+      }
+    } else {
+      // PID still alive — track it so processNextTask doesn't start another
+      console.log(`[hinge] Orphan ${e.name} still running (PID alive), tracking.`)
+      runningTasks.add(e.name)
+    }
+  }
+
+  // Process next waiting task if any slots freed
+  processNextTask()
+}
+
 // ── Queue helpers ──────────────────────────────────────────
 
 interface QueueItem {
@@ -609,6 +665,8 @@ function appendUserMessage(folderName: string, message: string) {
 function listQueue(): QueueItem[] {
   const queueDir = resolve(process.cwd(), '.hinge')
   if (!existsSync(queueDir)) return []
+  // Auto-recover orphaned _processing tasks on every list
+  recoverOrphanedTasks()
   const entries = readdirSync(queueDir, { withFileTypes: true })
   const items: QueueItem[] = []
   for (const e of entries) {

@@ -144,6 +144,7 @@ async function onAdd() {
     // Extract Vue props & computed styles
     if (el) {
       const { resolveVueFromElement, formatPropsInline } = await import('../utils/vueTarget')
+      const { generateCSSSelector } = await import('../utils/cssSelector')
       const vue = resolveVueFromElement(el)
       if (!vue.component?.startsWith('Hinge')) {
         const propsStr = formatPropsInline(vue.props, 6)
@@ -158,6 +159,9 @@ async function onAdd() {
         const styleStr = relevant.map(k => `${k}=${cs.getPropertyValue(k)}`).filter(([,v]) => v && v !== 'none' && v !== 'auto' && v !== 'normal').join(' ')
         if (styleStr) fields.Styling = styleStr
       }
+      // Generate unique CSS selector
+      const selector = generateCSSSelector(el)
+      if (selector) fields.Selector = selector
     }
     content = `### Component: ${label}`
     if (Object.keys(fields).length > 0) {

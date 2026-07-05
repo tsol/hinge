@@ -18,7 +18,7 @@ defineEmits<{ select: [] }>()
 
 <style scoped>
 .dev-card {
-  background: #161b22; border: 1px solid #30363d;
+  background: #21262d; border: 1px solid #30363d;
   border-radius: 8px; padding: 20px;
   transition: border-color 0.2s, box-shadow 0.2s;
 }

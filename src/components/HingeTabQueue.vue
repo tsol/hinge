@@ -128,15 +128,15 @@ const expandedMessages = computed(() => {
   return parseMessages(content)
 })
 
-onMounted(() => {
-  loadItems()
+onMounted(async () => {
+  await loadItems()
   startAutoRefresh()
   // Restore accordion expanded state from localStorage
   try {
     const saved = localStorage.getItem(EXPANDED_STORAGE_KEY)
     if (saved) {
       expandedStem.value = saved
-      nextTick(() => scrollChatToBottom())
+      scrollChatToBottom()
     }
   } catch { /* silent */ }
 })
@@ -224,6 +224,13 @@ async function refreshItems() {
     }
     items.value = fresh
     initSelected(fresh)
+
+    // Scroll expanded accordion to bottom after every refresh cycle
+    // Catches: agent writing new content mid-processing, processing→done transition,
+    // and any external chat.md update.
+    if (expandedStem.value) {
+      nextTick(() => scrollChatToBottom())
+    }
     const next: Record<string, boolean> = {}
     for (const item of fresh) {
       if (item.status === 'processing') next[item.name] = true
@@ -251,18 +258,6 @@ async function refreshItems() {
     }
     if (Object.keys(statusUpdates).length > 0) {
       agentStatus.value = { ...agentStatus.value, ...statusUpdates }
-    }
-
-    // Scroll to bottom if expanded item's status changed or content updated
-    if (expandedStem.value) {
-      const expandedItem = fresh.find(i => stem(i.name) === expandedStem.value)
-      if (expandedItem) {
-        const wasProc = Array.from(wasProcessing).some(n => stem(n) === stem(expandedItem.name))
-        const isNewContent = wasProc && expandedItem.status !== 'processing'
-        if (isNewContent) {
-          nextTick(() => scrollChatToBottom())
-        }
-      }
     }
   } catch { /* silent */ }
 }

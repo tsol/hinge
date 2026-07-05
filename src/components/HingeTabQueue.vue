@@ -62,6 +62,8 @@ const agentStatus = ref<Record<string, { status: string; checkedAt: number; elap
 const chatInputs = ref<Record<string, string>>({})
 // Auto-refresh timer
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
+/** Track expanded item content across poll cycles — only scroll when content changes */
+const prevExpandedContent = new Map<string, string>()
 
 /** True when at least one task is processing */
 const hasProcessing = computed(() => Object.keys(processingTask.value).length > 0)
@@ -136,6 +138,9 @@ onMounted(async () => {
     const saved = localStorage.getItem(EXPANDED_STORAGE_KEY)
     if (saved) {
       expandedStem.value = saved
+      // Seed content tracker with whatever is loaded for this stem
+      const existing = editingContent.value[saved]
+      if (existing) prevExpandedContent.set(saved, existing)
       scrollChatToBottom()
     }
   } catch { /* silent */ }
@@ -225,11 +230,15 @@ async function refreshItems() {
     items.value = fresh
     initSelected(fresh)
 
-    // Scroll expanded accordion to bottom after every refresh cycle
-    // Catches: agent writing new content mid-processing, processing→done transition,
-    // and any external chat.md update.
+    // Scroll to bottom only if expanded item's content actually changed
     if (expandedStem.value) {
-      nextTick(() => scrollChatToBottom())
+      const s = expandedStem.value
+      const newContent = editingContent.value[s] || ''
+      const oldContent = (prevExpandedContent.get(s) ?? '')
+      if (newContent !== oldContent) {
+        prevExpandedContent.set(s, newContent)
+        nextTick(() => scrollChatToBottom())
+      }
     }
     const next: Record<string, boolean> = {}
     for (const item of fresh) {
@@ -387,6 +396,8 @@ async function expandItem(name: string) {
   if (!(s in editingContent.value)) {
     editingContent.value = { ...editingContent.value, [s]: item.content }
   }
+  // Seed content tracker so next poll cycle doesn't re-scroll identical content
+  prevExpandedContent.set(s, editingContent.value[s])
   nextTick(() => scrollChatToBottom())
 }
 

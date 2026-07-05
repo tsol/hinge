@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { COG_SIZE } from '../constants'
 import type { TaskModel } from '../composables/useTaskModel'
 import {
@@ -123,6 +123,45 @@ watch(() => props.candidateLabels.length, () => {
   }
 })
 
+// ── Mode split-button (dropdown, like HingePanel group ops) ──
+const showModeDropdown = ref(false)
+const modeDropdownUp = ref(false)
+const chevronRef = ref<HTMLElement | null>(null)
+
+const cogExecMode = ref<'queue' | 'run'>('run')
+
+const modeLabels: Record<string, string> = {
+  queue: 'Queue',
+  run: 'Run',
+}
+
+function toggleModeDropdown() {
+  showModeDropdown.value = !showModeDropdown.value
+  if (showModeDropdown.value) {
+    // Check if dropdown fits below
+    nextTick(() => {
+      const el = chevronRef.value
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const dropH = 90 // approx 2 items
+      modeDropdownUp.value = rect.bottom + 4 + dropH > window.innerHeight
+    })
+  }
+}
+
+function setMode(mode: 'queue' | 'run') {
+  cogExecMode.value = mode
+  showModeDropdown.value = false
+}
+
+// Close dropdown on outside click
+function onDocCogClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest('.cog-mode-btn')) {
+    showModeDropdown.value = false
+  }
+}
+
 // ── Add action ──
 async function onAdd() {
   if (!taskText.value.trim() && props.candidateLabels.length === 0) return
@@ -172,6 +211,29 @@ async function onAdd() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
   })
+  // Extract folder name from response if available
+  let folderName = ''
+
+  // Run mode: enqueue + trigger execution
+  if (cogExecMode.value === 'run') {
+    // Find the just-created folder (newest _new)
+    const res = await fetch('/api/queue')
+    if (res.ok) {
+      const items: { name: string; status: string }[] = await res.json()
+      const newItem = items.find(i => i.status === 'new')
+      if (newItem) {
+        folderName = newItem.name
+        // Transition to wait, server auto-starts if idle
+        await fetch('/api/queue', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file: folderName, status: 'wait' }),
+        })
+        // Trigger immediate execution
+        await fetch('/api/queue/run', { method: 'POST' })
+      }
+    }
+  }
 
   // Reset
   taskText.value = ''
@@ -250,9 +312,11 @@ function toggleModal() {
 
 onMounted(() => {
   document.addEventListener('click', onDocumentClick, true)
+  document.addEventListener('click', onDocCogClick)
 })
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick, true)
+  document.removeEventListener('click', onDocCogClick)
 })
 
 // Clean up highlights when modal closes via any path (click outside, Add, gear click)
@@ -319,11 +383,32 @@ const wrapStyle = computed(() => ({
             :title="recording ? 'Release to send' : transcribing ? '⏳' : '🎤'"
           >{{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}</button>
 
-          <button
-            class="cog-modal__add"
-            :disabled="!taskText.trim() && candidateLabels.length === 0"
-            @click="onAdd"
-          >Add</button>
+          <div class="cog-mode-btn">
+            <button
+              class="cog-mode-btn__main"
+              @click="onAdd"
+              :disabled="!taskText.trim() && candidateLabels.length === 0"
+            >{{ modeLabels[cogExecMode] }}</button>
+            <button
+              ref="chevronRef"
+              class="cog-mode-btn__chevron"
+              :class="{ 'cog-mode-btn__chevron--active': showModeDropdown }"
+              @click.stop="toggleModeDropdown"
+            >▼</button>
+            <div
+              v-if="showModeDropdown"
+              class="cog-mode-dropdown"
+              :class="{ 'cog-mode-dropdown--up': modeDropdownUp }"
+            >
+              <button
+                v-for="mode in (['queue', 'run'] as const)"
+                :key="mode"
+                class="cog-mode-dropdown__item"
+                :class="{ 'cog-mode-dropdown__item--active': mode === cogExecMode }"
+                @click="setMode(mode)"
+              >{{ modeLabels[mode] }}</button>
+            </div>
+          </div>
         </div>
 
         <div class="cog-modal__selector">
@@ -414,15 +499,114 @@ const wrapStyle = computed(() => ({
   border-color: #238636 !important;
 }
 
+/* ── Split-button mode selector (dropdown, like HingePanel group ops) ── */
 .cog-modal__actions {
   display: flex !important;
   align-items: center !important;
-  justify-content: space-between !important;
-  gap: 4px !important;
+  gap: 6px !important;
 }
 
+.cog-mode-btn {
+  flex: 1 !important;
+  display: flex !important;
+  position: relative !important;
+  border-radius: 4px !important;
+  overflow: visible !important;
+}
+
+.cog-mode-btn__main {
+  flex: 1 !important;
+  min-width: 0 !important;
+  height: 28px !important;
+  padding: 0 8px !important;
+  border: 1px solid #3a3a5a !important;
+  border-right: none !important;
+  border-radius: 4px 0 0 4px !important;
+  background: #2a2a4a !important;
+  color: #c9d1d9 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  transition: background 0.15s !important;
+}
+.cog-mode-btn__main:hover:not(:disabled) {
+  background: #3a3a5a !important;
+}
+.cog-mode-btn__main:disabled {
+  opacity: 0.4 !important;
+  cursor: default !important;
+}
+
+.cog-mode-btn__chevron {
+  height: 28px !important;
+  width: 22px !important;
+  padding: 0 !important;
+  border: 1px solid #3a3a5a !important;
+  border-radius: 0 4px 4px 0 !important;
+  background: #2a2a4a !important;
+  color: #8b949e !important;
+  font-size: 9px !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: background 0.15s !important;
+  flex-shrink: 0 !important;
+}
+.cog-mode-btn__chevron:hover {
+  background: #3a3a5a !important;
+}
+.cog-mode-btn__chevron--active {
+  background: #1f6feb !important;
+  border-color: #1f6feb !important;
+  color: #fff !important;
+}
+
+/* ── Mode Dropdown ── */
+.cog-mode-dropdown {
+  position: absolute !important;
+  top: 100% !important;
+  right: 0 !important;
+  margin-top: 4px !important;
+  background: #1c1c3a !important;
+  border: 1px solid #2a2a4a !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  min-width: 100px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+  z-index: 100003 !important;
+}
+.cog-mode-dropdown--up {
+  top: auto !important;
+  bottom: 100% !important;
+  margin-top: 0 !important;
+  margin-bottom: 4px !important;
+}
+.cog-mode-dropdown__item {
+  display: block !important;
+  width: 100% !important;
+  padding: 6px 14px !important;
+  border: none !important;
+  background: transparent !important;
+  color: #c9d1d9 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  transition: background 0.1s !important;
+}
+.cog-mode-dropdown__item:hover {
+  background: rgba(88, 166, 255, 0.1) !important;
+}
+.cog-mode-dropdown__item--active {
+  color: #58a6ff !important;
+  font-weight: 700 !important;
+  background: rgba(88, 166, 255, 0.08) !important;
+}
+
+/* ── Mic ── */
 .cog-modal__mic {
-  width: 28px !important;
   height: 28px !important;
   border: none !important;
   border-radius: 50% !important;
@@ -436,30 +620,11 @@ const wrapStyle = computed(() => ({
   padding: 0 !important;
   flex-shrink: 0 !important;
 }
-
 .cog-modal__mic--recording {
   background: #da3633 !important;
 }
 .cog-modal__mic--transcribing {
   opacity: 0.6 !important;
-}
-
-.cog-modal__add {
-  height: 28px !important;
-  padding: 0 12px !important;
-  border: none !important;
-  border-radius: 4px !important;
-  background: #238636 !important;
-  color: #fff !important;
-  font-size: 12px !important;
-  font-weight: 600 !important;
-  cursor: pointer !important;
-  flex-shrink: 0 !important;
-}
-
-.cog-modal__add:disabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
 }
 
 /* ── Circular selector ── */

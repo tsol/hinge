@@ -3,6 +3,7 @@
     <div id="hinge-app">
       <HingeMenuToggle
         :menu-open="isOpen"
+        :badge-count="queueCount"
         @toggle="isOpen = !isOpen"
       />
 
@@ -16,6 +17,7 @@
         :candidates="candidates"
         :model="model"
         :selected-element="selectedElement"
+        :queue-count="queueCount"
         @pointerdown="onCogPointerDown"
         @pointermove="onCogPointerMove"
         @pointerup="onCogPointerUp"
@@ -31,20 +33,23 @@
         @close="isOpen = false"
       />
 
+      <ToastContainer />
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import './host'
 import HingeMenuToggle from './components/HingeMenuToggle.vue'
 import HingeCog from './components/HingeCog.vue'
 import HingePanel from './components/HingePanel.vue'
+import ToastContainer from './components/ToastContainer.vue'
 import { useCogDrag } from './composables/useCogDrag'
 import { useCogPosition } from './composables/useCogPosition'
 import { useTargetComponent } from './composables/useTargetComponent'
 import { useTaskModel } from './composables/useTaskModel'
+import { useToast } from './composables/useToast'
 
 const isOpen = ref(false)
 const alwaysOnTop = ref(false)
@@ -80,6 +85,55 @@ async function handleSend(onSuccess?: () => void) {
   model.attachments.value = []
   onSuccess?.()
 }
+
+// ── Queue polling (badge + toast on completion) ──
+const queueCount = ref(0)
+let prevProcessing = new Set<string>()
+let pollTimer: ReturnType<typeof setInterval> | null = null
+const { toasts: _t, success } = useToast()
+
+async function pollQueue() {
+  try {
+    const res = await fetch('/api/queue')
+    if (!res.ok) return
+    const items: { name: string; status: string; content?: string }[] = await res.json()
+
+    // Badge: processing + wait count
+    const active = items.filter(i => i.status === 'processing' || i.status === 'wait')
+    queueCount.value = active.length
+
+    // Detect task completions
+    for (const item of items) {
+      const stem = item.name.replace(/_(new|wait|done|processing)$/, '')
+      if (prevProcessing.has(stem) && item.status === 'done') {
+        // Fetch last ~250 chars of agent response
+        let detail = ''
+        try {
+          const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
+          if (chatRes.ok) {
+            const text = await chatRes.text()
+            const stripped = text.replace(/^```[\s\S]*?```\n?/gm, '').trim()
+            detail = stripped.slice(-250)
+          }
+        } catch { /* silent */ }
+        success(`✅ Task "${stem}" completed`, detail)
+      }
+    }
+
+    // Track current processing stems
+    prevProcessing = new Set(
+      items.filter(i => i.status === 'processing').map(i => i.name.replace(/_(new|wait|done|processing)$/, ''))
+    )
+  } catch { /* silent */ }
+}
+
+onMounted(() => {
+  pollTimer = setInterval(pollQueue, 3000)
+  pollQueue() // first tick immediately
+})
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
 </script>
 
 <style scoped>

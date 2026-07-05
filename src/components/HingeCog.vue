@@ -20,6 +20,7 @@ const props = defineProps<{
   candidates: Element[]
   model: TaskModel
   selectedElement: Element | null
+  queueCount: number
 }>()
 
 defineEmits<{
@@ -325,7 +326,12 @@ const wrapStyle = computed(() => ({
         @pointerup="$emit('pointerup', $event)"
         @pointercancel="$emit('pointercancel', $event)"
         @click.stop="toggleModal"
-      >⚙️</div>
+      >⚙️
+        <span
+          v-if="queueCount > 0"
+          class="cog-badge"
+        >{{ queueCount > 99 ? '99+' : queueCount }}</span>
+      </div>
 
       <!-- Modal -->
       <div
@@ -401,6 +407,7 @@ const wrapStyle = computed(() => ({
 }
 
 .cog-icon {
+  position: relative !important;
   width: 40px !important;
   height: 40px !important;
   margin: 0 !important;
@@ -425,6 +432,24 @@ const wrapStyle = computed(() => ({
 
 .cog-icon--open {
   filter: drop-shadow(0 0 4px rgba(0, 123, 255, 0.6)) !important;
+}
+
+/* ── Queue badge ── */
+.cog-badge {
+  position: absolute !important;
+  top: -2px !important;
+  right: -2px !important;
+  min-width: 16px !important;
+  height: 16px !important;
+  padding: 0 4px !important;
+  border-radius: 8px !important;
+  background: #da3633 !important;
+  color: #fff !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  line-height: 16px !important;
+  text-align: center !important;
+  pointer-events: none !important;
 }
 
 /* ── Modal ── */

@@ -638,8 +638,9 @@ function recoverOrphanedTasks() {
 // ── Queue helpers ──────────────────────────────────────────
 
 interface QueueItem {
-  name: string; status: 'wait' | 'done' | 'processing'; content: string
+  name: string; status: 'wait' | 'done' | 'processing' | 'error'; content: string
   component: string; note: string; url: string; dom: string
+  failed?: boolean
   agentStatus?: { status: string; pid?: number; elapsed?: number } | null
 }
 
@@ -682,6 +683,13 @@ function listQueue(): QueueItem[] {
     const url = content.match(/^### Page: (.+)/m)?.[1] ?? ''
     const dom = content.match(/^DOM: (.+)/m)?.[1] ?? ''
     const note = (() => {
+      // 1) Try last **User:** section (from follow-up messages)
+      const parts = content.split(/\n---\n/)
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const m = parts[i].match(/^\*\*User:\*\*\n([\s\S]*)/)
+        if (m) return m[1].trim()
+      }
+      // 2) Fall back to initial ### section note
       const sections = content.split(/^### /m)
       if (sections.length <= 1) return ''
       const last = sections[sections.length - 1]
@@ -696,6 +704,10 @@ function listQueue(): QueueItem[] {
       }
       return noteLines.join('\n').trim()
     })()
+    // Detect failed tasks
+    const errorPath = resolve(queueDir, name, '.error')
+    const failed = existsSync(errorPath)
+    const displayStatus: QueueItem['status'] = failed ? 'error' : status
     // Agent status for processing tasks
     let agentStatus: { status: string; pid?: number; elapsed?: number } | null = null
     if (status === 'processing') {
@@ -727,7 +739,7 @@ function listQueue(): QueueItem[] {
         agentStatus = { status: 'no_pid', elapsed }
       }
     }
-    items.push({ name, status, content: content || '', component, note, url, dom, agentStatus } as QueueItem)
+    items.push({ name, status: displayStatus, content: content || '', component, note, url, dom, failed, agentStatus } as QueueItem)
   }
   items.sort((a, b) => b.name.localeCompare(a.name))
   return items
@@ -888,7 +900,7 @@ function runTaskChunk(folderName: string) {
       try { appendFileSync(logPath, d.toString(), 'utf-8') } catch { /* ignore */ }
     })
 
-    child.on('close', () => {
+    child.on('close', (exitCode) => {
       runningTasks.delete(folderName)
 
       // If folder was already renamed by script self-cleanup, nothing to do
@@ -896,6 +908,11 @@ function runTaskChunk(folderName: string) {
         console.log(`[hinge] Task ${folderName} already cleaned up by script`)
         processNextTask()
         return
+      }
+
+      // Mark failed tasks (non-zero exit code)
+      if (exitCode !== 0 && exitCode !== null) {
+        try { writeFileSync(resolve(folderPath, '.error'), String(exitCode), 'utf-8') } catch { /* ignore */ }
       }
 
       if (stderr) {

@@ -21,10 +21,10 @@ export function useCogPosition() {
     transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
   }))
 
-  function centerPosition() {
+  function bottomRightPosition() {
     const { width, height } = getViewportBounds()
-    position.x = Math.max(0, (width - COG_SIZE) / 2)
-    position.y = Math.max(0, (height - COG_SIZE) / 2)
+    position.x = Math.max(0, width - COG_SIZE - 16)
+    position.y = Math.max(0, height - COG_SIZE - 16)
   }
 
   function clampPosition() {
@@ -36,7 +36,7 @@ export function useCogPosition() {
   }
 
   onMounted(() => {
-    centerPosition()
+    bottomRightPosition()
     clampPosition()
     window.addEventListener('resize', clampPosition)
     window.visualViewport?.addEventListener('resize', clampPosition)

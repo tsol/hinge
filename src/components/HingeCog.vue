@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { COG_SIZE } from '../constants'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, toRef } from 'vue'
 import type { TaskModel } from '../composables/useTaskModel'
 import {
   clearAllComponentHighlights,
@@ -8,6 +7,7 @@ import {
   getAllHighlightEntries,
   setHighlightEntry,
 } from '../composables/useElementHighlights'
+import { useCogModalPosition } from '../composables/useCogModalPosition'
 import HingeMic from './HingeMic.vue'
 
 const props = defineProps<{
@@ -30,8 +30,13 @@ defineEmits<{
   pointercancel: [event: PointerEvent]
 }>()
 
-// ── Modal state ──
-const modalOpen = ref(false)
+// ── Modal positioning (independent smooth-follow composable) ──
+const { modalOpen, modalStyle, toggleModal, closeModal } = useCogModalPosition(
+  toRef(props, 'positionX'),
+  toRef(props, 'positionY'),
+)
+
+// ── Task text ──
 const taskText = ref('')
 const circularIdx = ref(0)
 
@@ -211,73 +216,14 @@ async function onAdd() {
   modalOpen.value = false
 }
 
-// ── Position modal above/below cog ──
-const modalPos = computed(() => {
-  const vw = window.visualViewport?.width ?? window.innerWidth
-  const vh = window.visualViewport?.height ?? window.innerHeight
-  const cx = props.positionX
-  const cy = props.positionY
-  const estW = 280
-  const estH = 220
-
-  const cogCx = cx + COG_SIZE / 2
-  const cogCy = cy + COG_SIZE / 2
-
-  type HMode = 'center' | 'left' | 'right'
-  const horzModes: { mode: HMode; leftEdge: number }[] = [
-    { mode: 'center', leftEdge: cogCx - estW / 2 },
-    { mode: 'right', leftEdge: cx + COG_SIZE - estW },
-    { mode: 'left', leftEdge: cx },
-  ]
-  const bestH = horzModes.find(m => m.leftEdge >= 0 && m.leftEdge + estW <= vw)
-    ?? horzModes.reduce((a, b) => {
-      const aOver = Math.max(0, -a.leftEdge) + Math.max(0, a.leftEdge + estW - vw)
-      const bOver = Math.max(0, -b.leftEdge) + Math.max(0, b.leftEdge + estW - vw)
-      return aOver < bOver ? a : b
-    })
-
-  let leftPos: string; let rightPos: string; let transform: string
-  if (bestH.mode === 'center') {
-    leftPos = '50%'; rightPos = 'auto'; transform = 'translateX(-50%)'
-  } else if (bestH.mode === 'left') {
-    leftPos = '0'; rightPos = 'auto'; transform = 'translateX(0)'
-  } else {
-    leftPos = 'auto'; rightPos = '0'; transform = 'translateX(0)'
-  }
-
-  const GAP = 4
-  const aboveTop = cogCy - GAP - estH
-  const belowBottom = cogCy + GAP + estH
-  const aboveOverflow = Math.max(0, 0 - aboveTop)
-  const belowOverflow = Math.max(0, belowBottom - vh)
-
-  let top: string; let bottom: string
-  if (aboveOverflow <= belowOverflow || aboveTop >= 0) {
-    top = 'auto'; bottom = `calc(100% + ${GAP}px)`
-  } else {
-    top = `calc(100% + ${GAP}px)`; bottom = 'auto'
-  }
-
-  return { top, bottom, left: leftPos, right: rightPos, transform, width: `${estW}px` }
-})
-
 // ── Close on click outside ──
 function onDocumentClick(e: MouseEvent) {
   if (!modalOpen.value) return
   const target = e.target as Node
   const wrap = document.querySelector('.cog-wrap')
-  if (wrap && !wrap.contains(target)) {
-    modalOpen.value = false
-  }
-}
-
-function toggleModal() {
-  modalOpen.value = !modalOpen.value
-  if (modalOpen.value) {
-    if (props.candidateLabels.length > 0) {
-      circularIdx.value = 0
-      highlightCurrentEl()
-    }
+  const modal = document.querySelector('.cog-modal')
+  if (wrap && modal && !wrap.contains(target) && !modal.contains(target)) {
+    closeModal()
   }
 }
 
@@ -316,8 +262,8 @@ const wrapStyle = computed(() => ({
 
 <template>
   <Teleport to="body">
+    <!-- Gear icon (positioned by cogStyle translate3d) -->
     <div class="cog-wrap" :style="wrapStyle">
-      <!-- Gear icon -->
       <div
         class="cog-icon"
         :class="{ 'cog-icon--open': modalOpen }"
@@ -332,64 +278,64 @@ const wrapStyle = computed(() => ({
           class="cog-badge"
         >{{ queueCount > 99 ? '99+' : queueCount }}</span>
       </div>
+    </div>
 
-      <!-- Modal -->
-      <div
-        v-if="modalOpen"
-        class="cog-modal"
-        :style="modalPos"
-        @click.stop
-      >
-        <textarea
-          class="cog-modal__ta"
-          v-model="taskText"
-          placeholder="Task / comment…"
-          rows="3"
-          spellcheck="false"
-        ></textarea>
+    <!-- Modal (sibling, position: fixed → viewport coords independent of cog-wrap) -->
+    <div
+      v-if="modalOpen"
+      class="cog-modal"
+      :style="modalStyle"
+      @click.stop
+    >
+      <textarea
+        class="cog-modal__ta"
+        v-model="taskText"
+        placeholder="Task / comment…"
+        rows="3"
+        spellcheck="false"
+      ></textarea>
 
-        <div class="cog-modal__actions">
-          <HingeMic @transcribed="onTranscribed" />
+      <div class="cog-modal__actions">
+        <HingeMic @transcribed="onTranscribed" />
 
-          <div class="cog-mode-btn">
+        <div class="cog-mode-btn">
+          <button
+            class="cog-mode-btn__main"
+            @click="onAdd"
+            :disabled="!taskText.trim() && candidateLabels.length === 0"
+          >{{ modeLabels[cogExecMode] }}</button>
+          <button
+            ref="chevronRef"
+            class="cog-mode-btn__chevron"
+            :class="{ 'cog-mode-btn__chevron--active': showModeDropdown }"
+            @click.stop="toggleModeDropdown"
+          >▼</button>
+          <div
+            v-if="showModeDropdown"
+            class="cog-mode-dropdown"
+            :class="{ 'cog-mode-dropdown--up': modeDropdownUp }"
+          >
             <button
-              class="cog-mode-btn__main"
-              @click="onAdd"
-              :disabled="!taskText.trim() && candidateLabels.length === 0"
-            >{{ modeLabels[cogExecMode] }}</button>
-            <button
-              ref="chevronRef"
-              class="cog-mode-btn__chevron"
-              :class="{ 'cog-mode-btn__chevron--active': showModeDropdown }"
-              @click.stop="toggleModeDropdown"
-            >▼</button>
-            <div
-              v-if="showModeDropdown"
-              class="cog-mode-dropdown"
-              :class="{ 'cog-mode-dropdown--up': modeDropdownUp }"
-            >
-              <button
-                v-for="mode in (['queue', 'run'] as const)"
-                :key="mode"
-                class="cog-mode-dropdown__item"
-                :class="{ 'cog-mode-dropdown__item--active': mode === cogExecMode }"
-                @click="setMode(mode)"
-              >{{ modeLabels[mode] }}</button>
-            </div>
+              v-for="mode in (['queue', 'run'] as const)"
+              :key="mode"
+              class="cog-mode-dropdown__item"
+              :class="{ 'cog-mode-dropdown__item--active': mode === cogExecMode }"
+              @click="setMode(mode)"
+            >{{ modeLabels[mode] }}</button>
           </div>
         </div>
+      </div>
 
-        <div class="cog-modal__selector">
-          <button
-            class="cog-modal__el"
-            :title="currentLabel"
-            @click="cycleElement"
-          >
-            <span class="cog-modal__el-icon">🎯</span>
-            <span class="cog-modal__el-label">{{ currentLabel }}</span>
-            <span class="cog-modal__el-arrow">↻</span>
-          </button>
-        </div>
+      <div class="cog-modal__selector">
+        <button
+          class="cog-modal__el"
+          :title="currentLabel"
+          @click="cycleElement"
+        >
+          <span class="cog-modal__el-icon">🎯</span>
+          <span class="cog-modal__el-label">{{ currentLabel }}</span>
+          <span class="cog-modal__el-arrow">↻</span>
+        </button>
       </div>
     </div>
   </Teleport>
@@ -454,7 +400,7 @@ const wrapStyle = computed(() => ({
 
 /* ── Modal ── */
 .cog-modal {
-  position: absolute !important;
+  position: fixed !important;
   pointer-events: auto !important;
   background: #16162a !important;
   border: 1px solid #3a3a5a !important;

@@ -15,7 +15,7 @@ defineEmits<{ select: [] }>()
   flex-direction: row;
   padding: 6px 14px; margin: 0;
   font-size: 13px; font-weight: 400;
-  color: #fff; background: #da3633; border: 0;
+  color: #c9d1d9; background: #21262d; border: 1px solid #30363d;
   border-radius: 6px;
   width: auto; height: auto;
   min-width: 0; min-height: 0;
@@ -23,5 +23,5 @@ defineEmits<{ select: [] }>()
   text-align: center;
   cursor: pointer;
 }
-.dev-btn:hover { background: #f85149; }
+.dev-btn:hover { background: #30363d; border-color: #58a6ff; }
 </style>

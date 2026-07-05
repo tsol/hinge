@@ -90,13 +90,20 @@ async function handleSend(onSuccess?: () => void) {
 const queueCount = ref(0)
 let prevProcessing = new Set<string>()
 let pollTimer: ReturnType<typeof setInterval> | null = null
-const { toasts: _t, success } = useToast()
+const { toasts: _t, success, error } = useToast()
+
+/** Truncate first words of note to one line */
+function firstWords(note: string, maxLen = 50): string {
+  const oneLine = note.replace(/\s+/g, ' ').trim()
+  if (oneLine.length <= maxLen) return oneLine
+  return oneLine.slice(0, maxLen).trimEnd() + '…'
+}
 
 async function pollQueue() {
   try {
     const res = await fetch('/api/queue')
     if (!res.ok) return
-    const items: { name: string; status: string; content?: string }[] = await res.json()
+    const items: { name: string; status: string; content?: string; note?: string; failed?: boolean }[] = await res.json()
 
     // Badge: processing + wait count
     const active = items.filter(i => i.status === 'processing' || i.status === 'wait')
@@ -105,18 +112,26 @@ async function pollQueue() {
     // Detect task completions
     for (const item of items) {
       const stem = item.name.replace(/_(new|wait|done|processing)$/, '')
-      if (prevProcessing.has(stem) && item.status === 'done') {
-        // Fetch last ~250 chars of agent response
-        let detail = ''
-        try {
-          const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
-          if (chatRes.ok) {
-            const text = await chatRes.text()
-            const stripped = text.replace(/^```[\s\S]*?```\n?/gm, '').trim()
-            detail = stripped.slice(-250)
-          }
-        } catch { /* silent */ }
-        success(`✅ Task "${stem}" completed`, detail)
+      if (prevProcessing.has(stem) && (item.status === 'done' || item.status === 'error')) {
+        const query = firstWords(item.note || stem)
+        if (item.failed || item.status === 'error') {
+          error(`❌ ${query}`)
+        } else {
+          // Fetch last agent response from chat output
+          let detail = ''
+          try {
+            const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
+            if (chatRes.ok) {
+              const text = await chatRes.text()
+              // Extract last **Assistant:** section
+              const lastIdx = text.lastIndexOf('**Assistant:**')
+              if (lastIdx !== -1) {
+                detail = text.slice(lastIdx + '**Assistant:**'.length).replace(/^[\s\n]*/, '').replace(/[\s\n]*$/, '').trim()
+              }
+            }
+          } catch { /* silent */ }
+          success(`✅ ${query}`, detail)
+        }
       }
     }
 

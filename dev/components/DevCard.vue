@@ -2,7 +2,6 @@
   <div
     class="dev-card"
     :class="{ 'dev-card--highlighted': highlighted }"
-    :style="bgStyle"
   >
     <h3 class="dev-card__title">{{ title }}</h3>
     <p class="dev-card__desc" v-html="desc"></p>
@@ -11,15 +10,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import DevCardButton from './DevCardButton.vue'
-const props = defineProps<{
+defineProps<{
   title: string
   desc: string
   highlighted: boolean
-  background?: string
 }>()
-const bgStyle = computed(() => props.background ? { background: props.background } : undefined)
 defineEmits<{ select: [] }>()
 </script>
 

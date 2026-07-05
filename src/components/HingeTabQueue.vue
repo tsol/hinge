@@ -9,12 +9,13 @@ type ExecMode = 'execute' | 'stop' | 'delete'
 
 interface QueueItem {
   name: string
-  status: 'new' | 'wait' | 'done' | 'processing'
+  status: 'new' | 'wait' | 'done' | 'processing' | 'error'
   content: string
   component: string
   note: string
   url: string
   dom: string
+  failed?: boolean
   agentStatus?: { status: string; pid?: number; elapsed?: number } | null
 }
 
@@ -71,7 +72,7 @@ const hasProcessing = computed(() => Object.keys(processingTask.value).length > 
 /** Returns true if this status should show a checkbox in the current exec mode */
 function modeStatusCheck(status: string): boolean {
   if (props.execMode === 'stop') return status === 'wait' || status === 'processing'
-  if (props.execMode === 'delete') return status === 'new' || status === 'done'
+  if (props.execMode === 'delete') return status === 'new' || status === 'done' || status === 'error'
   return status === 'new' || status === 'wait' // execute mode
 }
 
@@ -303,6 +304,7 @@ function remove(name: string) {
 
 function statusIcon(status: string) {
   if (status === 'done') return '✅'
+  if (status === 'error') return '❌'
   if (status === 'processing') return '🔴'
   if (status === 'wait') return '⏳'
   return '📥'

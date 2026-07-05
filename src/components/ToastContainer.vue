@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { useToast } from '../composables/useToast'
 
-const { toasts, dismiss } = useToast()
+const { toasts, dismiss, toggleExpand } = useToast()
+
+function detailPreview(text: string, maxLen = 80): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim()
+  if (oneLine.length <= maxLen) return oneLine
+  return oneLine.slice(0, maxLen).trimEnd() + '…'
+}
 </script>
 
 <template>
@@ -13,13 +19,20 @@ const { toasts, dismiss } = useToast()
           :key="t.id"
           class="toast"
           :class="'toast--' + t.type"
-          @click="dismiss(t.id)"
         >
-          <div class="toast__header">
+          <div class="toast__header" @click="toggleExpand(t.id)">
             <span class="toast__msg">{{ t.message }}</span>
-            <button class="toast__close">✕</button>
+            <button class="toast__close" @click.stop="dismiss(t.id)">✕</button>
           </div>
-          <div v-if="t.detail" class="toast__detail">{{ t.detail }}</div>
+          <div
+            v-if="t.detail"
+            class="toast__detail"
+            :class="{ 'toast__detail--expanded': t.expanded }"
+            @click="toggleExpand(t.id)"
+          >
+            <template v-if="t.expanded">{{ t.detail }}</template>
+            <template v-else>{{ detailPreview(t.detail) }}</template>
+          </div>
         </div>
       </TransitionGroup>
     </div>
@@ -73,6 +86,9 @@ const { toasts, dismiss } = useToast()
   font-weight: 600 !important;
   color: #e0e0e0 !important;
   line-height: 1.4 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 
 .toast__close {
@@ -82,7 +98,12 @@ const { toasts, dismiss } = useToast()
   color: rgba(255,255,255,0.5) !important;
   cursor: pointer !important;
   font-size: 12px !important;
-  padding: 2px !important;
+  padding: 4px !important;
+  line-height: 1 !important;
+}
+
+.toast__close:hover {
+  color: rgba(255,255,255,0.9) !important;
 }
 
 .toast__detail {
@@ -90,8 +111,18 @@ const { toasts, dismiss } = useToast()
   font-size: 12px !important;
   color: rgba(255,255,255,0.7) !important;
   line-height: 1.4 !important;
-  max-height: 60px !important;
   overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  max-height: 18px !important;
+  transition: max-height 0.3s ease, white-space 0.3s ease !important;
+}
+
+.toast__detail--expanded {
+  white-space: pre-wrap !important;
+  overflow: auto !important;
+  text-overflow: clip !important;
+  max-height: 400px !important;
 }
 
 /* Full width on mobile */

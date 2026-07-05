@@ -954,6 +954,16 @@ function enqueueTask(folderName: string) {
 }
 
 function processNextTask() {
+  // Clean stale runningTasks entries — folders no longer on disk (child completed and renamed)
+  const queueDir = resolve(process.cwd(), '.hinge')
+  for (const task of runningTasks) {
+    const folderPath = resolve(queueDir, task)
+    if (!existsSync(folderPath)) {
+      runningTasks.delete(task)
+      console.log(`[hinge] Cleaned stale runningTasks: ${task} (folder gone)`)
+    }
+  }
+
   if (runningTasks.size > 0) return
 
   if (taskQueue.length > 0) {
@@ -962,7 +972,6 @@ function processNextTask() {
     return
   }
 
-  const queueDir = resolve(process.cwd(), '.hinge')
   if (!existsSync(queueDir)) return
   const entries = readdirSync(queueDir, { withFileTypes: true })
   const waitFolders = entries

@@ -4,8 +4,9 @@
     :class="{ 'dev-list-item--active': active }"
     @click="$emit('select')"
   >
-    <span class="dev-badge">{{ badge }}</span>
-    <span>{{ label }}</span>
+    <span class="dev-step">{{ badge }}</span>
+    <span class="dev-step-label">{{ label }}</span>
+    <span class="dev-step-check" v-if="active">✓</span>
   </div>
 </template>
 
@@ -24,20 +25,44 @@ defineEmits<{ select: [] }>()
   border-radius: 8px;
   padding: 14px 20px;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
   font-size: 14px;
 }
-.dev-list-item:hover { border-color: #58a6ff; }
-.dev-list-item--active {
+.dev-list-item:hover {
   border-color: #58a6ff;
-  background: #1c2333;
+  background: #1a2230;
 }
-.dev-badge {
+.dev-list-item--active {
+  border-color: #238636;
+  background: #0d2818;
+  box-shadow: 0 0 0 1px #238636;
+}
+.dev-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
   background: #21262d;
   color: #8b949e;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.dev-list-item--active .dev-step {
+  background: #238636;
+  color: #fff;
+}
+.dev-step-label {
+  flex: 1;
+  color: #c9d1d9;
+}
+.dev-step-check {
+  color: #238636;
+  font-weight: 700;
+  font-size: 16px;
+  flex-shrink: 0;
 }
 </style>

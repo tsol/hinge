@@ -20,6 +20,7 @@ import markdown from 'highlight.js/lib/languages/markdown'
 import yaml from 'highlight.js/lib/languages/yaml'
 import scss from 'highlight.js/lib/languages/scss'
 import bash from 'highlight.js/lib/languages/bash'
+import HingeMic from './HingeMic.vue'
 
 hljs.registerLanguage('typescript', typescript)
 hljs.registerLanguage('javascript', javascript)
@@ -398,48 +399,12 @@ function chipLabel(name: string): string {
   return base
 }
 
-// Voice recording
+function onTranscribed(text: string) {
+  note.value = (note.value ? note.value + '\n' : '') + text + '\n'
+  nextTick(() => autoResizeTextarea())
+}
+
 const noteTextareaRef = ref<HTMLTextAreaElement | null>(null)
-const recording = ref(false)
-const transcribing = ref(false)
-let mediaRecorder: MediaRecorder | null = null
-let audioChunks: Blob[] = []
-
-function startRecording() {
-  if (recording.value) return
-  audioChunks = []
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data) }
-    mediaRecorder.onstop = async () => {
-      // Stop all tracks
-      stream.getTracks().forEach(t => t.stop())
-      if (audioChunks.length === 0) return
-      transcribing.value = true
-      const blob = new Blob(audioChunks, { type: 'audio/webm' })
-      try {
-        const res = await fetch('/api/transcribe', { method: 'POST', body: blob })
-        const { text, error: err } = await res.json()
-        if (err) throw new Error(err)
-        if (text && noteTextareaRef.value) {
-          note.value = (note.value ? note.value + '\n' : '') + text + '\n'
-          autoResizeTextarea()
-        }
-      } catch { /* silent */ }
-      transcribing.value = false
-      audioChunks = []
-    }
-    mediaRecorder.start()
-    recording.value = true
-  }).catch(() => { /* no mic permission */ })
-}
-
-function stopRecording() {
-  if (!recording.value || !mediaRecorder) return
-  recording.value = false
-  mediaRecorder.stop()
-  mediaRecorder = null
-}
 
 function clearNote() {
   note.value = ''
@@ -667,20 +632,7 @@ function openPromptModal() {
             </div>
 
             <div class="input-actions">
-              <button
-                class="mic-btn"
-                :class="{
-                  'mic-btn--recording': recording,
-                  'mic-btn--transcribing': transcribing
-                }"
-                :disabled="transcribing"
-                @pointerdown.prevent="!transcribing && startRecording()"
-                @pointerup.prevent="stopRecording"
-                @pointerleave="recording && stopRecording()"
-                :title="recording ? lang.releaseToSend : transcribing ? lang.transcribing : lang.recordVoice"
-                >
-                {{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}
-              </button>
+              <HingeMic @transcribed="onTranscribed" />
               <div class="input-actions__group">
                 <button
                   class="drawer-btn drawer-btn--add"
@@ -1025,29 +977,6 @@ function openPromptModal() {
   overflow: hidden;
 }
 
-/* Voice mic button */
-.mic-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 50%;
-  background: #30363d;
-  cursor: pointer;
-  font-size: 15px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, transform 0.1s;
-  line-height: 1;
-  flex-shrink: 0;
-}
-.mic-btn:hover {
-  background: #484f58;
-}
-.mic-btn:active {
-  transform: scale(0.92);
-}
-
 /* Clear button (X icon overlay on textarea) */
 .clear-btn {
   position: absolute;
@@ -1078,25 +1007,6 @@ function openPromptModal() {
 .clear-btn:disabled {
   opacity: 0;
   pointer-events: none;
-}
-.mic-btn--recording {
-  background: #da3633 !important;
-  animation: mic-pulse 0.6s ease-in-out infinite;
-}
-.mic-btn--transcribing {
-  background: #1f6feb !important;
-  animation: mic-spin 0.8s linear infinite;
-  cursor: default;
-  opacity: 0.7;
-}
-@keyframes mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.5); }
-  50% { box-shadow: 0 0 0 8px rgba(218, 54, 51, 0); }
-}
-@keyframes mic-spin {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.08); }
-  100% { transform: scale(1); }
 }
 
 .input-scroll {

@@ -382,6 +382,22 @@ const flatTree = computed(() => {
   return result
 })
 
+// Shorten attachment label for chip display
+function chipLabel(name: string): string {
+  // Component: "HingePanel · button \"Add\"" → "HingePanel · Add"
+  if (name.includes('·')) {
+    const parts = name.split('·').map(p => p.trim())
+    // Take first 2 meaningful parts
+    const short = parts.slice(0, 2).join(' · ').replace(/"[^"]*"/g, '')
+    if (short.length > 30) return short.slice(0, 28) + '…'
+    return short.trim()
+  }
+  // File: extract basename
+  const base = name.split('/').pop() || name
+  if (base.length > 30) return base.slice(0, 28) + '…'
+  return base
+}
+
 // Voice recording
 const noteTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const recording = ref(false)
@@ -633,6 +649,21 @@ function openPromptModal() {
                   <line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
               </button>
+            </div>
+
+            <!-- Attachments chips -->
+            <div v-if="props.model.attachments.value.length > 0" class="chips-row">
+              <span
+                v-for="a in props.model.attachments.value"
+                :key="a.name"
+                class="chip"
+                :class="'chip--' + a.type"
+                :title="a.name"
+              >
+                <span class="chip__type">{{ a.type === 'component' ? '🧩' : '📄' }}</span>
+                <span class="chip__label">{{ chipLabel(a.name) }}</span>
+                <button class="chip__x" @click="props.model.removeAttachment(a.name)">✕</button>
+              </span>
             </div>
 
             <div class="input-actions">
@@ -1635,5 +1666,58 @@ function openPromptModal() {
 .drawer-btn--prompt-reset:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* ── Attachments chips ── */
+.chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  max-width: 100%;
+  overflow: hidden;
+}
+.chip--component {
+  background: #1f3a5f;
+  color: #c8d6e5;
+  border: 1px solid #2a5a8a;
+}
+.chip--file {
+  background: #2a2a3a;
+  color: #b0b0c0;
+  border: 1px solid #3a3a5a;
+}
+.chip__type {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.chip__x {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font-size: 10px;
+  opacity: 0.6;
+  line-height: 1;
+}
+.chip__x:hover {
+  opacity: 1;
 }
 </style>

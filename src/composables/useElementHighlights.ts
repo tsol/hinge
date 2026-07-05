@@ -67,6 +67,16 @@ export function isComponentHighlighted(name: string): boolean {
   return componentElementMap.has(name)
 }
 
+/** Get all current highlight entries (name → element). */
+export function getAllHighlightEntries(): [string, Element][] {
+  return Array.from(componentElementMap.entries())
+}
+
+/** Add a highlight entry without visual refresh. */
+export function setHighlightEntry(name: string, el: Element) {
+  componentElementMap.set(name, el)
+}
+
 /** Clear everything. */
 export function clearAllComponentHighlights() {
   componentElementMap.clear()

@@ -1,126 +1,154 @@
-import { computed, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import {
   type Section,
   parseQueueMarkdown,
   stringifyQueueMarkdown,
-  toggleSection,
-  upsertSection,
-  removeSection,
 } from '../utils/queueFormat'
 
+export interface Attachment {
+  type: 'component' | 'file'
+  name: string           // component label or file path
+  fields?: Record<string, string>  // e.g. {Url, Props, Styling}
+}
+
 export interface TaskModel {
-  /** Raw parsed sections — all types mixed */
+  /** Raw parsed sections — backward compat, derived from attachments + text */
   sections: ComputedRef<Section[]>
-  /** Only ### Page: sections */
   pages: ComputedRef<Section[]>
-  /** Only ### Component: sections */
   components: ComputedRef<Section[]>
-  /** Only ### File: sections */
   files: ComputedRef<Section[]>
+
+  /** New reactive model: plain text separate from attachments */
+  text: Ref<string>
+  attachments: Ref<Attachment[]>
 
   /** Check if a component is in the model */
   hasComponent(name: string): boolean
   /** Check if a file path is in the model */
   hasFile(path: string): boolean
-  /** Check if a URL is in the model */
-  hasPage(url: string): boolean
+  hasPage(_url: string): boolean
 
   /** Toggle — add if missing, remove if exists */
   toggleComponent(name: string, fields?: Record<string, string>): void
-  /** Upsert — add if missing, update fields if exists */
+  /** Upsert — add if missing */
   upsertComponent(name: string, fields?: Record<string, string>): void
   removeComponent(name: string): void
 
-  /** Add file path if not already present */
   upsertFile(path: string): void
   removeFile(path: string): void
 
-  /** Toggle page/URL */
-  togglePage(url: string): void
-  upsertPage(url: string): void
+  /** Remove any attachment by name */
+  removeAttachment(name: string): void
+
+  /** Serialize to markdown for queue submission */
+  serialize(): string
+  /** Deserialize from markdown (loading existing task content) */
+  deserialize(md: string): void
+}
+
+/** Convert Attachment[] + text → Section[] (backward compat) */
+function toSections(attachments: Attachment[], text: string): Section[] {
+  const sections: Section[] = []
+  for (const a of attachments) {
+    if (a.type === 'component') {
+      sections.push({ type: 'component', value: a.name, fields: a.fields ?? {}, note: '' })
+    } else if (a.type === 'file') {
+      sections.push({ type: 'file', value: a.name, fields: {}, note: '' })
+    }
+  }
+  const trimmed = text.trim()
+  if (trimmed) {
+    sections.push({ type: 'text', value: trimmed, fields: {}, note: '' })
+  }
+  return sections
 }
 
 /**
- * Central reactive "computer" that derives state from the textarea markdown model.
- *
- * @param note — the V-model ref bound to the textarea (the source of truth)
+ * Reactive model: attachments (components/files) + text stored as plain arrays,
+ * not embedded in markdown. Backward-compatible computed Section[] for legacy consumers.
  */
-export function useTaskModel(note: Ref<string>): TaskModel {
-  const sections = computed(() => parseQueueMarkdown(note.value))
+export function useTaskModel(): TaskModel {
+  const text = ref('')
+  const attachments = ref<Attachment[]>([])
 
-  const pages = computed(() => sections.value.filter(s => s.type === 'page'))
+  const sections = computed(() => toSections(attachments.value, text.value))
+  const pages = computed<Section[]>(() => [])
   const components = computed(() => sections.value.filter(s => s.type === 'component'))
   const files = computed(() => sections.value.filter(s => s.type === 'file'))
 
   function hasComponent(name: string): boolean {
-    return sections.value.some(s => s.type === 'component' && s.value === name)
+    return attachments.value.some(a => a.type === 'component' && a.name === name)
   }
-
   function hasFile(path: string): boolean {
-    return sections.value.some(s => s.type === 'file' && s.value === path)
+    return attachments.value.some(a => a.type === 'file' && a.name === path)
   }
-
-  function hasPage(url: string): boolean {
-    return sections.value.some(s => s.type === 'page' && s.value === url)
-  }
-
-  // ── Mutators ──────────────────────────────────────────────
-
-  /** Set note content, ensuring 2 trailing newlines for click space */
-  function setNote(v: string) {
-    const n = v.match(/\n+$/)?.[0]?.length ?? 0
-    note.value = n >= 2 ? v : v + '\n'.repeat(2 - n)
+  function hasPage(_url: string): boolean {
+    return false // pages no longer tracked separately
   }
 
   function toggleComponent(name: string, fields?: Record<string, string>) {
-    const updated = toggleSection(parseQueueMarkdown(note.value), 'component', name, fields)
-    setNote(stringifyQueueMarkdown(updated))
+    const idx = attachments.value.findIndex(a => a.type === 'component' && a.name === name)
+    if (idx >= 0) {
+      attachments.value = attachments.value.filter((_, i) => i !== idx)
+    } else {
+      attachments.value = [...attachments.value, { type: 'component', name, fields }]
+    }
   }
 
   function upsertComponent(name: string, fields?: Record<string, string>) {
-    const updated = upsertSection(parseQueueMarkdown(note.value), 'component', name, fields)
-    setNote(stringifyQueueMarkdown(updated))
+    const existing = attachments.value.find(a => a.type === 'component' && a.name === name)
+    if (existing) {
+      if (fields) existing.fields = { ...existing.fields, ...fields }
+    } else {
+      attachments.value = [...attachments.value, { type: 'component', name, fields }]
+    }
   }
 
   function removeComponent(name: string) {
-    const updated = removeSection(parseQueueMarkdown(note.value), 'component', name)
-    setNote(stringifyQueueMarkdown(updated))
+    attachments.value = attachments.value.filter(a => !(a.type === 'component' && a.name === name))
   }
 
   function upsertFile(path: string) {
-    const updated = upsertSection(parseQueueMarkdown(note.value), 'file', path)
-    setNote(stringifyQueueMarkdown(updated))
+    if (!hasFile(path)) {
+      attachments.value = [...attachments.value, { type: 'file', name: path }]
+    }
   }
 
   function removeFile(path: string) {
-    const updated = removeSection(parseQueueMarkdown(note.value), 'file', path)
-    setNote(stringifyQueueMarkdown(updated))
+    attachments.value = attachments.value.filter(a => !(a.type === 'file' && a.name === path))
   }
 
-  function togglePage(url: string) {
-    const updated = toggleSection(parseQueueMarkdown(note.value), 'page', url)
-    setNote(stringifyQueueMarkdown(updated))
+  function removeAttachment(name: string) {
+    attachments.value = attachments.value.filter(a => a.name !== name)
   }
 
-  function upsertPage(url: string) {
-    const updated = upsertSection(parseQueueMarkdown(note.value), 'page', url)
-    setNote(stringifyQueueMarkdown(updated))
+  function serialize(): string {
+    return stringifyQueueMarkdown(toSections(attachments.value, text.value))
+  }
+
+  function deserialize(md: string) {
+    const parsed = parseQueueMarkdown(md)
+    const newAttachments: Attachment[] = []
+    let newText = ''
+    for (const s of parsed) {
+      if (s.type === 'component') {
+        newAttachments.push({ type: 'component', name: s.value, fields: s.fields })
+      } else if (s.type === 'file') {
+        newAttachments.push({ type: 'file', name: s.value })
+      } else if (s.type === 'text') {
+        newText = (newText ? newText + '\n' : '') + s.value
+      }
+    }
+    attachments.value = newAttachments
+    text.value = newText
   }
 
   return {
-    sections,
-    pages,
-    components,
-    files,
-    hasComponent,
-    hasFile,
-    hasPage,
-    toggleComponent,
-    upsertComponent,
-    removeComponent,
-    upsertFile,
-    removeFile,
-    togglePage,
-    upsertPage,
+    sections, pages, components, files,
+    text, attachments,
+    hasComponent, hasFile, hasPage,
+    toggleComponent, upsertComponent, removeComponent,
+    upsertFile, removeFile, removeAttachment,
+    serialize, deserialize,
   }
 }

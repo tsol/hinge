@@ -4,7 +4,6 @@ import { COG_SIZE } from '../constants'
 import type { TaskModel } from '../composables/useTaskModel'
 import {
   clearAllComponentHighlights,
-  toggleComponentHighlight,
   refreshHighlights,
   getAllHighlightEntries,
   setHighlightEntry,
@@ -159,8 +158,6 @@ async function onAdd() {
     if (Object.keys(fields).length > 0) {
       content += '\n' + Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join('\n')
     }
-    // Also add to global model so chips show in main panel
-    props.model.toggleComponent(label, fields)
   }
   const text = taskText.value.trim()
   if (text) {
@@ -168,12 +165,6 @@ async function onAdd() {
   }
 
   if (!content.trim()) return
-
-  // Register component in highlight map so it persists after modal closes
-  if (props.candidateLabels.length > 0) {
-    const el = props.candidates[circularIdx.value]
-    if (el) toggleComponentHighlight(props.candidateLabels[circularIdx.value], el)
-  }
 
   // POST to queue
   await fetch('/api/queue', {

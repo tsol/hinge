@@ -601,6 +601,7 @@ function openPromptModal() {
               <textarea
                 ref="noteTextareaRef"
                 class="drawer-textarea"
+                data-hinge-field="panel"
                 :value="note"
                 @input="onNoteInput"
                 :placeholder="lang.notePlaceholder"

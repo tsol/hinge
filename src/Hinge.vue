@@ -39,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import './host'
 import HingeMenuToggle from './components/HingeMenuToggle.vue'
 import HingeCog from './components/HingeCog.vue'
@@ -60,11 +60,36 @@ onMounted(() => {
 
 const { state: ui } = usePersistedState('ui', {
   isOpen: false,
-  hasFocus: false,
+  focusedField: '',
 })
 const isOpen = computed({
   get: () => ui.isOpen as boolean,
   set: (v: boolean) => { ui.isOpen = v },
+})
+
+// ── Focus persistence ──
+function onFocusIn(e: FocusEvent) {
+  const el = e.target as HTMLElement | null
+  if (!el) return
+  const field = el.getAttribute('data-hinge-field')
+  if (field === 'cog' || field === 'panel') {
+    ui.focusedField = field
+  }
+}
+onMounted(() => {
+  document.addEventListener('focusin', onFocusIn, true)
+  // Restore focus after UI state is restored
+  if (ui.focusedField) {
+    nextTick(() => {
+      setTimeout(() => {
+        const ta = document.querySelector<HTMLTextAreaElement>(`[data-hinge-field="${ui.focusedField}"]`)
+        ta?.focus()
+      }, 50)
+    })
+  }
+})
+onUnmounted(() => {
+  document.removeEventListener('focusin', onFocusIn, true)
 })
 
 

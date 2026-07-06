@@ -293,6 +293,7 @@ const wrapStyle = computed(() => ({
     >
       <textarea
         class="cog-modal__ta"
+        data-hinge-field="cog"
         v-model="taskText"
         placeholder="Task / comment…"
         rows="3"

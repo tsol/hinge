@@ -59,6 +59,12 @@ const { state: panel } = usePersistedState('panel', {
   activeTab: 'input' as 'input' | 'files' | 'source',
   lastFile: '',
 })
+const { state: panelExec } = usePersistedState('panelExecMode', {
+  mode: 'execute' as 'execute' | 'stop' | 'delete',
+})
+const { state: drawerW } = usePersistedState('drawerWidth', {
+  width: 380,
+})
 const activeTab = computed({
   get: () => panel.activeTab as 'input' | 'files' | 'source',
   set: (v: 'input' | 'files' | 'source') => { panel.activeTab = v },
@@ -135,19 +141,14 @@ function startLogPoll(folder: string) {
   }, 2000)
 }
 
-// Drawer resizable width
-const STORAGE_KEY = 'hinge-drawer-width'
-const DEFAULT_WIDTH = 380
-const drawerWidth = ref(DEFAULT_WIDTH)
+const drawerWidth = computed({
+  get: () => drawerW.width as number,
+  set: (v: number) => { drawerW.width = v },
+})
 const resizing = ref(false)
 const drawerRef = ref<HTMLDivElement | null>(null)
 
 onMounted(() => {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) {
-    const w = parseInt(saved, 10)
-    if (w >= 260 && w <= 800) drawerWidth.value = w
-  }
   // Auto-resize textarea to content
   setTimeout(autoResizeTextarea, 50)
 })
@@ -166,7 +167,6 @@ function startResize(e: PointerEvent) {
 
   function onUp() {
     resizing.value = false
-    localStorage.setItem(STORAGE_KEY, String(drawerWidth.value))
     document.removeEventListener('pointermove', onMove)
     document.removeEventListener('pointerup', onUp)
     document.body.style.cursor = ''
@@ -206,7 +206,10 @@ function onEditTask(item: { name: string; content: string }) {
 
 type ExecMode = 'execute' | 'stop' | 'delete'
 
-const execMode = ref<ExecMode>('execute')
+const execMode = computed({
+  get: () => panelExec.mode as ExecMode,
+  set: (v: ExecMode) => { panelExec.mode = v },
+})
 const showModeDropdown = ref(false)
 const dropdownUp = ref(false)
 const chevronRef = ref<HTMLElement | null>(null)
@@ -440,9 +443,18 @@ function onNoteInput(e: Event) {
   autoResizeTextarea()
 }
 
-// Source edit mode
-const sourceEditMode = ref(false)
-const sourceEditingContent = ref('')
+const { state: sourceEdit } = usePersistedState('sourceEdit', {
+  mode: false,
+  content: '',
+})
+const sourceEditMode = computed({
+  get: () => sourceEdit.mode as boolean,
+  set: (v: boolean) => { sourceEdit.mode = v },
+})
+const sourceEditingContent = computed({
+  get: () => sourceEdit.content as string,
+  set: (v: string) => { sourceEdit.content = v },
+})
 const sourceSaving = ref(false)
 
 function toggleSourceEdit() {

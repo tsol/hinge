@@ -3,6 +3,7 @@ import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
 import { hydrateDrafts, clearDraft } from '../composables/useTaskDraft'
 import { useI18n } from '../composables/useI18n'
+import { usePersistedState } from '../composables/usePersistedState'
 import { shortenOutput } from '../utils/shortenOutput'
 
 type ExecMode = 'execute' | 'stop' | 'delete'
@@ -41,8 +42,18 @@ const loading = ref(false)
 const error = ref('')
 
 // Use stem (name without status suffix) for expanded tracking — survives status changes
-const expandedStem = ref<string | null>(null)
-const EXPANDED_STORAGE_KEY = 'hinge:tabqueue:expanded'
+const { state: tabqueueState } = usePersistedState('tabqueue', {
+  expandedStem: '',
+  chatInputs: {} as Record<string, string>,
+})
+const expandedStem = computed({
+  get: () => tabqueueState.expandedStem as string || null,
+  set: (v: string | null) => { tabqueueState.expandedStem = v ?? '' },
+})
+const chatInputs = computed({
+  get: () => tabqueueState.chatInputs as Record<string, string>,
+  set: (v: Record<string, string>) => { tabqueueState.chatInputs = v },
+})
 
 /** Derive stem from folder name */
 function stem(name: string): string {
@@ -59,8 +70,7 @@ const selected = ref<Record<string, boolean>>({})
 const processingTask = ref<Record<string, boolean>>({})
 // Per-item: agent status {status, checkedAt}
 const agentStatus = ref<Record<string, { status: string; checkedAt: number; elapsed?: number }>>({})
-// Per-item: chat input (new message)
-const chatInputs = ref<Record<string, string>>({})
+// Per-item: chat input (new message) — persisted via tabqueue state above
 // Auto-refresh timer
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 /** Track expanded item content across poll cycles — only scroll when content changes */
@@ -134,17 +144,15 @@ const expandedMessages = computed(() => {
 onMounted(async () => {
   await loadItems()
   startAutoRefresh()
-  // Restore accordion expanded state from localStorage
-  try {
-    const saved = localStorage.getItem(EXPANDED_STORAGE_KEY)
-    if (saved) {
-      expandedStem.value = saved
-      // Seed content tracker with whatever is loaded for this stem
-      const existing = editingContent.value[saved]
-      if (existing) prevExpandedContent.set(saved, existing)
-      scrollChatToBottom()
-    }
-  } catch { /* silent */ }
+  // Restore accordion expanded state from persisted state
+  const saved = tabqueueState.expandedStem as string
+  if (saved) {
+    expandedStem.value = saved
+    // Seed content tracker with whatever is loaded for this stem
+    const existing = editingContent.value[saved]
+    if (existing) prevExpandedContent.set(saved, existing)
+    scrollChatToBottom()
+  }
 })
 
 onUnmounted(() => {
@@ -386,11 +394,9 @@ async function expandItem(name: string) {
   const s = stem(name)
   if (expandedStem.value === s) {
     expandedStem.value = null
-    try { localStorage.removeItem(EXPANDED_STORAGE_KEY) } catch { /* silent */ }
     return
   }
   expandedStem.value = s
-  try { localStorage.setItem(EXPANDED_STORAGE_KEY, s) } catch { /* silent */ }
 
   const item = items.value.find(i => i.name === name)
   if (!item) return

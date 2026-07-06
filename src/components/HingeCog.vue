@@ -104,7 +104,13 @@ function onTranscribed(text: string) {
 const modeDropdownUp = ref(false)
 const chevronRef = ref<HTMLElement | null>(null)
 
-const cogExecMode = ref<'queue' | 'run'>('run')
+const { state: cogExec } = usePersistedState('cogExecMode', {
+  mode: 'run' as 'queue' | 'run',
+})
+const cogExecMode = computed({
+  get: () => cogExec.mode as 'queue' | 'run',
+  set: (v: 'queue' | 'run') => { cogExec.mode = v },
+})
 
 const modeLabels: Record<string, string> = {
   queue: 'Queue',

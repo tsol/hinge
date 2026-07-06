@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { API_BASE } from '../const'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import type { HingeTarget } from '../types/target'
 import type { TaskModel } from '../composables/useTaskModel'
 import { useFileTree, type FileEntry } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
@@ -37,7 +36,6 @@ hljs.registerLanguage('scss', scss)
 hljs.registerLanguage('bash', bash)
 
 const props = defineProps<{
-  target: HingeTarget
   modelValue: string
   model: TaskModel
 }>()

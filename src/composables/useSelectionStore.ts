@@ -8,7 +8,15 @@ export interface Selection {
   dom: string
   url: string
   props: Record<string, unknown>
-  source: 'gear' | 'file' | ''
+  /** gear-preview = debounced from cog target; file = explicit file-tree pick */
+  source: 'gear-preview' | 'file' | ''
+}
+
+export interface GearPreviewPayload {
+  component: string
+  dom: string
+  props: Record<string, unknown>
+  filePath: string | null
 }
 
 // Singleton state — global reactive store
@@ -37,22 +45,15 @@ export function useSelectionStore() {
     }
   }
 
-  /** Called when user picks a component from gear dropdown (has DOM info) */
-  async function fromGear(
-    comp: string,
-    dom: string = '',
-    url: string = '',
-    props: Record<string, unknown> = {},
-  ) {
-    state.component = comp
-    state.dom = dom
-    state.url = url
-    state.props = { ...props }
-    state.source = 'gear'
-    // Resolve component name → file path
-    const filePath = await resolveFilePath(comp)
-    if (filePath) {
-      state.filePath = filePath
+  /** Debounced mirror from cog target — updates Source preview, not task model. */
+  function previewFromGear(payload: GearPreviewPayload) {
+    if (state.source === 'file') return
+    state.component = payload.component
+    state.dom = payload.dom
+    state.props = { ...payload.props }
+    state.source = 'gear-preview'
+    if (payload.filePath) {
+      state.filePath = payload.filePath
     }
   }
 
@@ -60,11 +61,9 @@ export function useSelectionStore() {
   function fromFile(filePath: string) {
     state.filePath = filePath
     state.source = 'file'
-    // Extract component name from path: "src/components/Foo.tsx" → "Foo"
     const basename = filePath.split('/').pop() || ''
     const comp = stripComponentExtension(basename)
     state.component = comp
-    // Clear DOM info — we selected a file, not a DOM element
     state.dom = ''
     state.url = ''
     state.props = {}
@@ -72,7 +71,7 @@ export function useSelectionStore() {
 
   return {
     selection: state as Readonly<Selection>,
-    fromGear,
+    previewFromGear,
     fromFile,
     resolveFilePath,
   }

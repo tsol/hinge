@@ -1,38 +1,56 @@
-import { onMounted, ref, shallowRef, watch, type Reactive } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch, type Reactive } from 'vue'
 import { COG_SIZE } from '../constants'
 import type { HingeTarget } from '../types/target'
 import { EMPTY_TARGET } from '../types/target'
+import { setGearTargetHighlight } from './useElementHighlights'
+import { useSelectionStore } from './useSelectionStore'
 import { getCycleableTargetsAtPoint, describeElement } from '../utils/domTarget'
 import { formatTargetSummary, resolveTargetFromElement } from '../utils/resolveTarget'
 import type { CogPosition } from './useCogPosition'
 
+const PREVIEW_DEBOUNCE_MS = 400
+
 export function useTargetComponent(position: Reactive<CogPosition>) {
+  const { previewFromGear, resolveFilePath } = useSelectionStore()
+
   const target = ref<HingeTarget>({ ...EMPTY_TARGET })
-  const targetLabel = ref(EMPTY_TARGET.component)
   const selectedElement = shallowRef<Element | null>(null)
   const candidates = shallowRef<Element[]>([])
-  const candidateIndex = ref(0)
   const candidateLabels = ref<string[]>([])
+  const selectedIndex = ref(0)
+  /** User clicked the circular selector — keep selection while element stays in stack. */
+  const userPinned = ref(false)
+
+  const currentLabel = computed(
+    () => candidateLabels.value[selectedIndex.value] ?? '(no elements)',
+  )
+
+  let previewTimer: ReturnType<typeof setTimeout> | null = null
 
   function applySelection() {
     const list = candidates.value
-    const idx = Math.min(candidateIndex.value, list.length - 1)
+    if (list.length === 0) {
+      selectedIndex.value = 0
+      selectedElement.value = null
+      target.value = { ...EMPTY_TARGET }
+      setGearTargetHighlight(null)
+      return
+    }
+
+    const idx = Math.min(selectedIndex.value, list.length - 1)
+    selectedIndex.value = idx
     const el = list[idx] ?? null
     selectedElement.value = el
     target.value = resolveTargetFromElement(el)
-    targetLabel.value = formatTargetSummary(
-      target.value,
-      idx,
-      list.length,
-    )
+    setGearTargetHighlight(el)
   }
 
   function rebuildCandidates() {
     const raw = getCycleableTargetsAtPoint(position.x, position.y, COG_SIZE)
-    // Deduplicate by combined component + DOM label
     const seen = new Set<string>()
     const deduped: Element[] = []
     const labels: string[] = []
+
     for (const el of raw) {
       const t = resolveTargetFromElement(el)
       const dom = describeElement(el)
@@ -43,16 +61,18 @@ export function useTargetComponent(position: Reactive<CogPosition>) {
         labels.push(label)
       }
     }
+
     candidates.value = deduped
     candidateLabels.value = labels
 
-    // Preserve current selection if element still in list
-    const currentEl = selectedElement.value
-    if (currentEl && deduped.includes(currentEl)) {
-      candidateIndex.value = deduped.indexOf(currentEl)
+    const prevEl = selectedElement.value
+    if (userPinned.value && prevEl && deduped.includes(prevEl)) {
+      selectedIndex.value = deduped.indexOf(prevEl)
     } else {
-      candidateIndex.value = 0
+      selectedIndex.value = 0
+      userPinned.value = false
     }
+
     applySelection()
   }
 
@@ -62,24 +82,54 @@ export function useTargetComponent(position: Reactive<CogPosition>) {
       rebuildCandidates()
       return
     }
-    candidateIndex.value = (candidateIndex.value + 1) % list.length
+    userPinned.value = true
+    selectedIndex.value = (selectedIndex.value + 1) % list.length
     applySelection()
   }
 
-  // Only re-scan when gear position changes (drag) or on explicit rebuild
+  function schedulePreviewMirror() {
+    if (previewTimer) clearTimeout(previewTimer)
+    previewTimer = setTimeout(async () => {
+      previewTimer = null
+      const t = target.value
+      const comp = t.component
+      if (!comp || comp === 'unknown' || !/^[A-Z]/.test(comp)) return
+
+      const filePath = await resolveFilePath(comp)
+      previewFromGear({
+        component: comp,
+        dom: t.dom,
+        props: t.props,
+        filePath,
+      })
+    }, PREVIEW_DEBOUNCE_MS)
+  }
+
   watch(
     () => [position.x, position.y],
     () => rebuildCandidates(),
   )
 
-  /** Call this when user clicks/taps on the gear icon */
-  function refreshOnUserAction() {
-    rebuildCandidates()
-  }
+  watch(
+    () => [target.value.component, target.value.dom, JSON.stringify(target.value.props)] as const,
+    () => schedulePreviewMirror(),
+  )
 
   onMounted(() => {
     rebuildCandidates()
   })
 
-  return { target, targetLabel, selectedElement, candidates, cycleTarget, updateHighlight: applySelection, candidateLabels, refreshOnUserAction }
+  return {
+    target,
+    selectedElement,
+    candidates,
+    candidateLabels,
+    selectedIndex,
+    currentLabel,
+    userPinned,
+    cycleTarget,
+    rebuildCandidates,
+    formatLabel: (index = selectedIndex.value, total = candidates.value.length) =>
+      formatTargetSummary(target.value, index, total),
+  }
 }

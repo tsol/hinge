@@ -13,21 +13,23 @@
         :position-x="position.x"
         :position-y="position.y"
         :always-on-top="alwaysOnTop"
+        :current-label="currentLabel"
         :candidate-labels="candidateLabels"
         :candidates="candidates"
-        :model="model"
+        :target="target"
         :selected-element="selectedElement"
+        :model="model"
         :queue-count="queueCount"
         @pointerdown="onCogPointerDown"
         @pointermove="onCogPointerMove"
         @pointerup="onCogPointerUp"
         @pointercancel="onCogPointerUp"
+        @cycle-target="cycleTarget"
       />
 
       <HingePanel
         v-if="isOpen"
         v-model="note"
-        :target="target"
         :model="model"
         @send="handleSend"
         @close="isOpen = false"
@@ -106,7 +108,14 @@ const {
   clampPosition,
 })
 
-const { target, selectedElement, candidateLabels, candidates } = useTargetComponent(position)
+const {
+  target,
+  selectedElement,
+  candidateLabels,
+  candidates,
+  currentLabel,
+  cycleTarget,
+} = useTargetComponent(position)
 
 const model = useTaskModel()
 const note = model.text

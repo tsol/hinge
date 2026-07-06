@@ -1,13 +1,8 @@
 <script setup lang="ts">
 import { API_BASE } from '../const'
-import { ref, computed, watch, onMounted, onUnmounted, nextTick, toRef } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, toRef } from 'vue'
+import type { HingeTarget } from '../types/target'
 import type { TaskModel } from '../composables/useTaskModel'
-import {
-  clearAllComponentHighlights,
-  refreshHighlights,
-  getAllHighlightEntries,
-  setHighlightEntry,
-} from '../composables/useElementHighlights'
 import { useCogModalPosition } from '../composables/useCogModalPosition'
 import { usePersistedState } from '../composables/usePersistedState'
 import { useI18n } from '../composables/useI18n'
@@ -45,10 +40,12 @@ const props = defineProps<{
   positionX: number
   positionY: number
   alwaysOnTop: boolean
+  currentLabel: string
   candidateLabels: string[]
   candidates: Element[]
-  model: TaskModel
+  target: HingeTarget
   selectedElement: Element | null
+  model: TaskModel
   queueCount: number
 }>()
 
@@ -57,6 +54,7 @@ defineEmits<{
   pointermove: [event: PointerEvent]
   pointerup: [event: PointerEvent]
   pointercancel: [event: PointerEvent]
+  'cycle-target': []
 }>()
 
 // ── Modal positioning (independent smooth-follow composable) ──
@@ -70,64 +68,6 @@ const { state: cogText } = usePersistedState('cogText', {
   text: '',
 })
 const taskText = toRef(cogText, 'text')
-const circularIdx = ref(0)
-
-// ── Circular selector ──
-
-/** Current selected label (from candidates, cycled by clicking) */
-const currentLabel = computed(() => {
-  return props.candidateLabels[circularIdx.value] ?? '(no elements)'
-})
-
-// Temp highlight for circular selector
-let savedHighlights: [string, Element][] = []
-
-function clearTempHighlight() {
-  const old = document.querySelector('[data-hinge-temp-highlight]')
-  if (old) {
-    const htm = old as HTMLElement
-    htm.removeAttribute('data-hinge-temp-highlight')
-    htm.style.removeProperty('outline')
-    htm.style.removeProperty('outline-offset')
-    htm.style.removeProperty('outline-color')
-    htm.style.removeProperty('box-shadow')
-    htm.style.removeProperty('transition')
-  }
-}
-
-function applyTempHighlight(el: Element) {
-  clearTempHighlight()
-  const htm = el as HTMLElement
-  htm.setAttribute('data-hinge-temp-highlight', '')
-  htm.style.setProperty('outline', '2.5px solid #ffa657', 'important')
-  htm.style.setProperty('outline-offset', '1px', 'important')
-  htm.style.setProperty('box-shadow', '0 0 8px 2px #ffa65744, inset 0 0 4px 1px #ffa65722', 'important')
-}
-
-function highlightCurrentEl() {
-  const el = props.candidates[circularIdx.value]
-  if (el) applyTempHighlight(el)
-}
-
-function cycleElement() {
-  if (props.candidateLabels.length === 0) return
-  circularIdx.value = (circularIdx.value + 1) % props.candidateLabels.length
-  highlightCurrentEl()
-}
-
-// Reset circular index when candidates change
-watch(() => props.candidateLabels.length, () => {
-  if (circularIdx.value >= props.candidateLabels.length) {
-    circularIdx.value = 0
-  }
-})
-
-// Re-apply DOM highlight when candidates are updated during drag with modal open
-watch(() => props.candidates, () => {
-  if (modalOpen.value && props.candidates.length > 0) {
-    highlightCurrentEl()
-  }
-})
 
 // ── Mode split-button (dropdown, like HingePanel group ops) ──
 const { t: lang } = useI18n()
@@ -183,8 +123,8 @@ async function onAdd() {
   // Build content: component header + text
   let content = ''
   if (props.candidateLabels.length > 0) {
-    const label = props.candidateLabels[circularIdx.value]
-    const el = props.candidates[circularIdx.value]
+    const label = props.currentLabel
+    const el = props.selectedElement
     const fields: Record<string, string> = {}
     // Save page URL
     const url = window.location.pathname + window.location.search
@@ -278,26 +218,6 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocCogClick)
 })
 
-// Clean up highlights when modal closes via any path (click outside, Add, gear click)
-watch(modalOpen, (isOpen) => {
-  if (!isOpen) {
-    clearTempHighlight()
-    for (const [name, el] of savedHighlights) {
-      if (document.body.contains(el)) {
-        setHighlightEntry(name, el)
-      }
-    }
-    refreshHighlights()
-    savedHighlights = []
-  } else {
-    // Save existing and clear for temp highlight
-    savedHighlights = getAllHighlightEntries()
-    clearAllComponentHighlights()
-    // Draw temp highlight on the initially selected element
-    highlightCurrentEl()
-  }
-})
-
 const wrapStyle = computed(() => ({
   ...props.cogStyle,
   zIndex: props.alwaysOnTop ? 100001 : 1,
@@ -375,7 +295,7 @@ const wrapStyle = computed(() => ({
         <button
           class="cog-modal__el"
           :title="currentLabel"
-          @click="cycleElement"
+          @click="$emit('cycle-target')"
         >
           <span class="cog-modal__el-icon">🎯</span>
           <span class="cog-modal__el-label">{{ currentLabel }}</span>

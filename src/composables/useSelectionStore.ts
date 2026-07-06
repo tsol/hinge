@@ -1,4 +1,5 @@
-import { reactive } from 'vue'
+import { API_BASE } from '../const'
+import { ref } from 'vue'
 
 export interface Selection {
   component: string
@@ -23,7 +24,7 @@ export function useSelectionStore() {
   async function resolveFilePath(comp: string): Promise<string | null> {
     if (!comp || !/^[A-Z]/.test(comp)) return null
     try {
-      const res = await fetch(`/api/find-file?name=${encodeURIComponent(comp + '.vue')}`)
+      const res = await fetch(`${API_BASE}/find-file?name=${encodeURIComponent(comp + '.vue')}`)
       if (!res.ok) return null
       const data = await res.json()
       return data.path || null

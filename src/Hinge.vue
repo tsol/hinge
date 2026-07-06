@@ -51,6 +51,9 @@ import { useTargetComponent } from './composables/useTargetComponent'
 import { useTaskModel } from './composables/useTaskModel'
 import { useToast } from './composables/useToast'
 import { usePersistedState } from './composables/usePersistedState'
+import { useFontScale } from './composables/useFontScale'
+import { prettifyMessage } from './utils/mdToHtml'
+import { API_BASE } from './const'
 
 const alwaysOnTop = ref(false)
 
@@ -111,7 +114,7 @@ const note = model.text
 async function handleSend(onSuccess?: () => void) {
   const serialized = model.serialize()
   if (!serialized.trim()) return
-  await fetch('/api/queue', {
+  await fetch(`${API_BASE}/queue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: serialized }),
@@ -120,6 +123,9 @@ async function handleSend(onSuccess?: () => void) {
   model.attachments.value = []
   onSuccess?.()
 }
+
+// ── Font scale ──
+useFontScale()
 
 // ── Queue polling (badge + toast on completion) ──
 const queueCount = ref(0)
@@ -134,24 +140,9 @@ function firstWords(note: string, maxLen = 60): string {
   return oneLine.slice(0, maxLen).trimEnd() + '…'
 }
 
-/** Clean up agent response for toast body: strip code fences, diff headers, condense */
-function prettifyResponse(text: string): string {
-  return text
-    .replace(/\r/g, '')                                   // normalize line endings
-    .replace(/^```[\s\S]*?```[ \t]*\n?/gm, '')           // strip code blocks
-    .replace(/^--- .+\n/gm, '')                           // strip diff --- a/file headers
-    .replace(/^\+\+\+ .+\n/gm, '')                        // strip diff +++ b/file headers
-    .replace(/^@@ .+@@.*\n/gm, '')                        // strip diff hunk headers
-    .replace(/^\s*┊.*\n/gm, '')                           // strip ┊ review diff etc
-    .replace(/^a\/.*→.*\n/gm, '')                         // strip a/file → b/file
-    .replace(/^[-+]\S.*\n/gm, '')                         // strip diff +/- content lines
-    .replace(/\n{3,}/g, '\n\n')                           // collapse blank lines
-    .trim()
-}
-
 async function pollQueue() {
   try {
-    const res = await fetch('/api/queue')
+    const res = await fetch(`${API_BASE}/queue`)
     if (!res.ok) return
     const items: { name: string; status: string; content?: string; note?: string; failed?: boolean }[] = await res.json()
 
@@ -170,13 +161,13 @@ async function pollQueue() {
           // Fetch last agent response from chat output
           let detail = ''
           try {
-            const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
+            const chatRes = await fetch(`${API_BASE}/output?file=${encodeURIComponent(item.name)}`)
             if (chatRes.ok) {
               const text = await chatRes.text()
               // Extract last **Assistant:** section
               const lastIdx = text.lastIndexOf('**Assistant:**')
               if (lastIdx !== -1) {
-                detail = prettifyResponse(text.slice(lastIdx + '**Assistant:**'.length))
+                detail = prettifyMessage(text.slice(lastIdx + '**Assistant:**'.length))
               }
             }
           } catch { /* silent */ }

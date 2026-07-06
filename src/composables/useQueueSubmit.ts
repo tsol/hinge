@@ -1,10 +1,11 @@
+import { API_BASE } from '../const'
 import { ref } from 'vue'
 
 export function useQueueSubmit() {
   const note = ref('')
 
   async function sendNote(content: string, onSuccess?: () => void) {
-    await fetch('/api/queue', {
+    await fetch(`${API_BASE}/queue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),

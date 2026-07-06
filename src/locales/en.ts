@@ -18,12 +18,15 @@ export const en = {
   add: 'Add',
   /** Mode labels */
   execute: 'Execute',
+  run: 'Run',
+  queue: 'Queue',
   stop: 'Stop',
   delete: 'Delete',
   /** Tabs */
   input: 'Input',
   files: 'Files',
   source: 'Source',
+  settings: 'Settings',
   /** Files tab */
   projectFiles: 'Project Files',
   /** Source tab / gear */

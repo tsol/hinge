@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { API_BASE } from '../const'
+import { ref, onMounted } from 'vue'
 
 const emit = defineEmits<{
   transcribed: [text: string]
@@ -22,7 +23,7 @@ function startRecording() {
       transcribing.value = true
       const blob = new Blob(audioChunks, { type: 'audio/webm' })
       try {
-        const res = await fetch('/api/transcribe', { method: 'POST', body: blob })
+        const res = await fetch(`${API_BASE}/transcribe`, { method: 'POST', body: blob })
         const { text, error: err } = await res.json()
         if (err) throw new Error(err)
         if (text) {
@@ -68,7 +69,7 @@ function stopRecording() {
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  font-size: 14px !important;
+  font-size: var(--hinge-fs-14, 14px) !important;
   padding: 0 !important;
   flex-shrink: 0 !important;
   width: 28px !important;

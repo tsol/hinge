@@ -5,8 +5,7 @@
       :key="i"
       :badge="item.badge"
       :label="item.label"
-      :active="i === activeIndex"
-      @select="$emit('selectItem', i)"
+      :active="false"
     />
   </section>
 </template>
@@ -16,10 +15,7 @@ import DevListItem from './DevListItem.vue'
 
 defineProps<{
   items: { badge: string; label: string }[]
-  activeIndex: number
 }>()
-
-defineEmits<{ selectItem: [index: number] }>()
 </script>
 
 <style scoped>

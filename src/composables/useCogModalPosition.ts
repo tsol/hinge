@@ -3,12 +3,20 @@ import { COG_SIZE } from '../constants'
 import { useSmoothFollow } from './useSmoothFollow'
 import { usePersistedState } from './usePersistedState'
 
-const EST_W = 280
-const EST_H = 220
+const BASE_W = 280
+const BASE_H = 220
 
 // Offsets as percentage of modal height (per user request: 30-40%)
-const GAP_ABOVE = -(EST_H * 0.35) + 20  // overlap gear by 35% + 20px back
-const GAP_BELOW = EST_H * 0.38 - 30     // gap below gear = 38% - 30px
+const GAP_ABOVE_RATIO = 0.35
+const GAP_BELOW_RATIO = 0.38
+
+function getCssScale(): number {
+  try {
+    return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hinge-scale')) || 1
+  } catch {
+    return 1
+  }
+}
 
 function getViewport() {
   const vv = window.visualViewport
@@ -34,44 +42,52 @@ export function useCogModalPosition(posX: Ref<number>, posY: Ref<number>) {
   })
   const modalOpen = toRef(cogUi, 'modalOpen')
 
+  // Scale-dependent modal dimensions — read --hinge-scale from CSS
+  const estW = computed(() => {
+    const s = getCssScale()
+    return Math.round(BASE_W * s)
+  })
+  const estH = computed(() => {
+    const s = getCssScale()
+    return Math.round(BASE_H * s)
+  })
+  const gapAbove = computed(() => -(estH.value * GAP_ABOVE_RATIO) + 20)
+  const gapBelow = computed(() => estH.value * GAP_BELOW_RATIO - 30)
+
   // Target top-left corner of the modal:
   //   Horizontal: centered on gear, clamped to viewport edges
   //   Vertical:   above gear or below gear, clamped to viewport edges
-  // When direction flips the target jumps; the spring handles the transition.
   const modalTarget = computed(() => {
     const { width: vw, height: vh } = getViewport()
     const gx = posX.value + COG_SIZE / 2   // gear horizontal center
+    const w = estW.value
+    const h = estH.value
 
     // Horizontal: centered on gear
-    let tx = gx - EST_W / 2
-    tx = Math.max(0, Math.min(tx, vw - EST_W))
+    let tx = gx - w / 2
+    tx = Math.max(0, Math.min(tx, vw - w))
 
     // Vertical: above or below based on where the gear is
-    // "Above": modal bottom = gear top - GAP → modal top = posY - GAP - EST_H
-    // "Below": modal top = gear bottom + GAP → modal top = posY + COG_SIZE + GAP
-    const aboveProposal = posY.value - GAP_ABOVE - EST_H
-    const belowProposal = posY.value + COG_SIZE + GAP_BELOW
+    const aboveProposal = posY.value - gapAbove.value - h
+    const belowProposal = posY.value + COG_SIZE + gapBelow.value
 
     const aboveFits = aboveProposal >= 0
-    const belowFits = belowProposal + EST_H <= vh
+    const belowFits = belowProposal + h <= vh
 
     let ty: number
     if (aboveFits && !belowFits) {
-      ty = aboveProposal   // only above fits
+      ty = aboveProposal
     } else if (!aboveFits && belowFits) {
-      ty = belowProposal   // only below fits
+      ty = belowProposal
     } else if (!aboveFits && !belowFits) {
-      // Neither fits — pick the one with less overflow
-      const aboveOverflow = Math.abs(aboveProposal) // negative → overflow
-      const belowOverflow = belowProposal + EST_H - vh
+      const aboveOverflow = Math.abs(aboveProposal)
+      const belowOverflow = belowProposal + h - vh
       ty = aboveOverflow <= belowOverflow ? aboveProposal : belowProposal
     } else {
-      // Both fit — prefer above
       ty = aboveProposal
     }
 
-    // Clamp output so spring never targets off-screen
-    ty = Math.max(0, Math.min(ty, vh - EST_H))
+    ty = Math.max(0, Math.min(ty, vh - h))
 
     return { x: tx, y: ty }
   })
@@ -90,11 +106,13 @@ export function useCogModalPosition(posX: Ref<number>, posY: Ref<number>) {
   // Output style — safe clamp in case smoothCorner lags behind target
   const modalStyle = computed(() => {
     const { width: vw, height: vh } = getViewport()
+    const w = estW.value
+    const h = estH.value
     return {
       position: 'fixed',
-      top: `${Math.max(0, Math.min(smoothCorner.y, vh - EST_H))}px`,
-      left: `${Math.max(0, Math.min(smoothCorner.x, vw - EST_W))}px`,
-      width: `${EST_W}px`,
+      top: `${Math.max(0, Math.min(smoothCorner.y, vh - h))}px`,
+      left: `${Math.max(0, Math.min(smoothCorner.x, vw - w))}px`,
+      width: `${w}px`,
     } as Record<string, string>
   })
 

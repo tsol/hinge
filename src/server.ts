@@ -2,7 +2,7 @@
  * hinge-server — standalone HTTP server for Hinge API
  *
  * Runs on port 5177 inside the same Node process as Vite.
- * Vite proxies /api/* → localhost:5177.
+ * Vite proxies /hinge-api/* → localhost:5177.
  * The http.Server survives Vite HMR (module-level let), so agent
  * processes spawned with detached:true are never killed by HMR.
  */
@@ -16,8 +16,9 @@ import {
 } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { resolve, relative, sep } from 'node:path'
+import { API_BASE } from './const'
 import { spawn } from 'node:child_process'
-import { loadConfig, resolveAgentScripts, saveConfig, readPrompt } from './utils/config'
+import { resolveAgentScripts, readPrompt } from './utils/config'
 
 // ── Shared state ──────────────────────────────────────────
 const runningTasks = new Set<string>()
@@ -91,13 +92,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   const pathname = url.pathname
 
   // ── Directory / file operations ──
-  if (pathname === '/api/list-dir') {
+  if (pathname === `${API_BASE}/list-dir`) {
     const dir = url.searchParams.get('path') || '.'
     json(res, listDir(dir))
     return
   }
 
-  if (pathname === '/api/read-file') {
+  if (pathname === `${API_BASE}/read-file`) {
     const file = url.searchParams.get('path')
     if (!file) { status(res, 400, 'missing path'); return }
     const content = readFilePath(file)
@@ -106,7 +107,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  if (pathname === '/api/raw-file') {
+  if (pathname === `${API_BASE}/raw-file`) {
     const filePath = url.searchParams.get('path')
     if (!filePath) { status(res, 400, 'missing path'); return }
     const abs = resolve(process.cwd(), filePath)
@@ -123,7 +124,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  if (pathname === '/api/find-file') {
+  if (pathname === `${API_BASE}/find-file`) {
     const name = url.searchParams.get('name')
     if (!name) { json(res, { error: 'missing name' }, 400); return }
     json(res, { path: findFile(name) })
@@ -131,7 +132,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Write file ──
-  if (pathname === '/api/write-file') {
+  if (pathname === `${API_BASE}/write-file`) {
     if (method !== 'PUT') { json(res, { error: 'PUT only' }, 405); return }
     const body = await readBuffer(req)
     try {
@@ -148,7 +149,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Transcribe ──
-  if (pathname === '/api/transcribe') {
+  if (pathname === `${API_BASE}/transcribe`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     const buf = await readBuffer(req)
     const tmpPath = resolve(process.cwd(), `.hinge/_recording_${Date.now()}.webm`)
@@ -179,7 +180,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Attachments ──
-  if (pathname === '/api/attach') {
+  if (pathname === `${API_BASE}/attach`) {
     const folder = url.searchParams.get('folder')
     if (method === 'GET') {
       if (!folder) { json(res, { error: 'missing folder' }, 400); return }
@@ -231,7 +232,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Serve attachment files ──
-  if (pathname === '/api/attach-file') {
+  if (pathname === `${API_BASE}/attach-file`) {
     const folder = url.searchParams.get('folder')
     const file = url.searchParams.get('file')
     if (!folder || !file) { status(res, 400, 'missing folder or file'); return }
@@ -249,7 +250,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Queue output ──
-  if (pathname === '/api/output') {
+  if (pathname === `${API_BASE}/output`) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
     const file = url.searchParams.get('file')
     if (!file) { status(res, 400, 'missing file'); return }
@@ -260,7 +261,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Queue log ──
-  if (pathname === '/api/log') {
+  if (pathname === `${API_BASE}/log`) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
     const file = url.searchParams.get('file')
     if (!file) { status(res, 400, 'missing file'); return }
@@ -271,7 +272,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Queue run (trigger processing of queued tasks) ──
-  if (pathname === '/api/queue/run') {
+  if (pathname === `${API_BASE}/queue/run`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     processNextTask()
     json(res, { ok: true })
@@ -279,7 +280,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Queue CRUD ──
-  if (pathname === '/api/queue') {
+  if (pathname === `${API_BASE}/queue`) {
     if (method === 'GET') { json(res, listQueue()); return }
 
     if (method === 'DELETE') {
@@ -324,7 +325,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Chat send ──
-  if (pathname === '/api/chat/send') {
+  if (pathname === `${API_BASE}/chat/send`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     const body = await readBuffer(req)
     try {
@@ -362,14 +363,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Status ──
-  if (pathname === '/api/status') {
+  if (pathname === `${API_BASE}/status`) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
     json(res, { running: runningTasks.size > 0, processing: Array.from(runningTasks) })
     return
   }
 
   // ── Cancel ──
-  if (pathname === '/api/cancel') {
+  if (pathname === `${API_BASE}/cancel`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     const body = await readBuffer(req)
     try {
@@ -426,24 +427,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  // ── Config ──
-  if (pathname === '/api/config') {
-    if (method === 'GET') { json(res, loadConfig()); return }
-    if (method === 'POST') {
-      const body = await readBuffer(req)
-      try {
-        const config = JSON.parse(body.toString())
-        saveConfig(config)
-        json(res, { ok: true })
-      } catch { json(res, { error: 'invalid config' }, 400) }
-      return
-    }
-    json(res, { error: 'method not allowed' }, 405)
-    return
-  }
-
   // ── Prompt ──
-  if (pathname === '/api/prompt') {
+  if (pathname === `${API_BASE}/prompt`) {
     if (method === 'GET') {
       text(res, readPrompt())
       return
@@ -470,7 +455,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ── Execute ──
-  if (pathname === '/api/execute') {
+  if (pathname === `${API_BASE}/execute`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     const queueDir = resolve(process.cwd(), '.hinge')
     if (!existsSync(queueDir)) { json(res, { ok: true, spawned: 0 }); return }
@@ -845,9 +830,7 @@ function runTaskChunk(folderName: string) {
     return
   }
 
-  const config = loadConfig()
-  const agentName = config.agent?.name || 'hermes'
-  const scripts = resolveAgentScripts(agentName)
+  const scripts = resolveAgentScripts()
 
   const alias = folderName.replace(/_processing$/, '')
   const sessionMarker = resolve(folderPath, '.session')

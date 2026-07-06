@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../const'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, toRef } from 'vue'
 import type { TaskModel } from '../composables/useTaskModel'
 import {
@@ -9,7 +10,34 @@ import {
 } from '../composables/useElementHighlights'
 import { useCogModalPosition } from '../composables/useCogModalPosition'
 import { usePersistedState } from '../composables/usePersistedState'
+import { useI18n } from '../composables/useI18n'
 import HingeMic from './HingeMic.vue'
+
+// ── Drag-vs-click guard ──
+const didDrag = ref(false)
+const dragStart = { x: 0, y: 0 }
+const DRAG_THRESHOLD = 6
+
+function onIconPointerDown(e: PointerEvent) {
+  didDrag.value = false
+  dragStart.x = e.clientX
+  dragStart.y = e.clientY
+}
+
+function onIconPointerMove(e: PointerEvent) {
+  if (didDrag.value) return
+  if (Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) > DRAG_THRESHOLD) {
+    didDrag.value = true
+  }
+}
+
+function onIconClick() {
+  if (didDrag.value) {
+    didDrag.value = false
+    return
+  }
+  toggleModal()
+}
 
 const props = defineProps<{
   open: boolean
@@ -94,7 +122,16 @@ watch(() => props.candidateLabels.length, () => {
   }
 })
 
+// Re-apply DOM highlight when candidates are updated during drag with modal open
+watch(() => props.candidates, () => {
+  if (modalOpen.value && props.candidates.length > 0) {
+    highlightCurrentEl()
+  }
+})
+
 // ── Mode split-button (dropdown, like HingePanel group ops) ──
+const { t: lang } = useI18n()
+
 const showModeDropdown = ref(false)
 
 function onTranscribed(text: string) {
@@ -111,11 +148,6 @@ const cogExecMode = computed({
   get: () => cogExec.mode as 'queue' | 'run',
   set: (v: 'queue' | 'run') => { cogExec.mode = v },
 })
-
-const modeLabels: Record<string, string> = {
-  queue: 'Queue',
-  run: 'Run',
-}
 
 function toggleModeDropdown() {
   showModeDropdown.value = !showModeDropdown.value
@@ -192,7 +224,7 @@ async function onAdd() {
   if (!content.trim()) return
 
   // POST to queue
-  await fetch('/api/queue', {
+  await fetch(`${API_BASE}/queue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -203,20 +235,20 @@ async function onAdd() {
   // Run mode: enqueue + trigger execution
   if (cogExecMode.value === 'run') {
     // Find the just-created folder (newest _new)
-    const res = await fetch('/api/queue')
+    const res = await fetch(`${API_BASE}/queue`)
     if (res.ok) {
       const items: { name: string; status: string }[] = await res.json()
       const newItem = items.find(i => i.status === 'new')
       if (newItem) {
         folderName = newItem.name
         // Transition to wait, server auto-starts if idle
-        await fetch('/api/queue', {
-          method: 'PUT',
+        await fetch(`${API_BASE}/queue`, {
+            method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ file: folderName, status: 'wait' }),
         })
         // Trigger immediate execution
-        await fetch('/api/queue/run', { method: 'POST' })
+        await fetch(`${API_BASE}/queue/run`, { method: 'POST' })
       }
     }
   }
@@ -261,6 +293,8 @@ watch(modalOpen, (isOpen) => {
     // Save existing and clear for temp highlight
     savedHighlights = getAllHighlightEntries()
     clearAllComponentHighlights()
+    // Draw temp highlight on the initially selected element
+    highlightCurrentEl()
   }
 })
 
@@ -277,11 +311,11 @@ const wrapStyle = computed(() => ({
       <div
         class="cog-icon"
         :class="{ 'cog-icon--open': modalOpen }"
-        @pointerdown="$emit('pointerdown', $event)"
-        @pointermove="$emit('pointermove', $event)"
+        @pointerdown="onIconPointerDown($event); $emit('pointerdown', $event)"
+        @pointermove="onIconPointerMove($event); $emit('pointermove', $event)"
         @pointerup="$emit('pointerup', $event)"
         @pointercancel="$emit('pointercancel', $event)"
-        @click.stop="toggleModal"
+        @click.stop="onIconClick"
       >⚙️
         <span
           v-if="queueCount > 0"
@@ -314,7 +348,7 @@ const wrapStyle = computed(() => ({
             class="cog-mode-btn__main"
             @click="onAdd"
             :disabled="!taskText.trim() && candidateLabels.length === 0"
-          >{{ modeLabels[cogExecMode] }}</button>
+          >{{ lang[cogExecMode] }}</button>
           <button
             ref="chevronRef"
             class="cog-mode-btn__chevron"
@@ -332,7 +366,7 @@ const wrapStyle = computed(() => ({
               class="cog-mode-dropdown__item"
               :class="{ 'cog-mode-dropdown__item--active': mode === cogExecMode }"
               @click="setMode(mode)"
-            >{{ modeLabels[mode] }}</button>
+            >{{ lang[mode] }}</button>
           </div>
         </div>
       </div>
@@ -375,7 +409,7 @@ const wrapStyle = computed(() => ({
   cursor: grab !important;
   touch-action: none !important;
   pointer-events: auto !important;
-  font-size: 28px !important;
+  font-size: var(--hinge-fs-28, 28px) !important;
   line-height: 1 !important;
   user-select: none !important;
   -webkit-user-select: none !important;
@@ -402,7 +436,7 @@ const wrapStyle = computed(() => ({
   border-radius: 8px !important;
   background: #da3633 !important;
   color: #fff !important;
-  font-size: 10px !important;
+  font-size: var(--hinge-fs-10, 10px) !important;
   font-weight: 700 !important;
   line-height: 16px !important;
   text-align: center !important;
@@ -419,7 +453,7 @@ const wrapStyle = computed(() => ({
   padding: 8px !important;
   display: flex !important;
   flex-direction: column !important;
-  gap: 6px !important;
+  gap: var(--hinge-spacing-sm, 6px) !important;
   box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
   z-index: 100002 !important;
 }
@@ -428,7 +462,7 @@ const wrapStyle = computed(() => ({
   width: 100% !important;
   min-height: 48px !important;
   padding: 6px 8px !important;
-  font-size: 12px !important;
+  font-size: var(--hinge-fs-12, 12px) !important;
   font-family: inherit !important;
   background: #1e1e3a !important;
   color: #e0e0e0 !important;
@@ -447,7 +481,7 @@ const wrapStyle = computed(() => ({
 .cog-modal__actions {
   display: flex !important;
   align-items: center !important;
-  gap: 6px !important;
+  gap: var(--hinge-spacing-sm, 6px) !important;
 }
 
 .cog-mode-btn {
@@ -466,7 +500,7 @@ const wrapStyle = computed(() => ({
   border-radius: 4px 0 0 4px !important;
   background: #2a2a4a !important;
   color: #c9d1d9 !important;
-  font-size: 11px !important;
+  font-size: var(--hinge-fs-11, 11px) !important;
   font-weight: 600 !important;
   cursor: pointer !important;
   white-space: nowrap !important;
@@ -488,7 +522,7 @@ const wrapStyle = computed(() => ({
   border-radius: 0 4px 4px 0 !important;
   background: #2a2a4a !important;
   color: #8b949e !important;
-  font-size: 9px !important;
+  font-size: var(--hinge-fs-9, 9px) !important;
   cursor: pointer !important;
   display: flex !important;
   align-items: center !important;
@@ -532,10 +566,11 @@ const wrapStyle = computed(() => ({
   border: none !important;
   background: transparent !important;
   color: #c9d1d9 !important;
-  font-size: 12px !important;
+  font-size: var(--hinge-fs-12, 12px) !important;
   font-weight: 500 !important;
   cursor: pointer !important;
   text-align: left !important;
+  white-space: nowrap !important;
   transition: background 0.1s !important;
 }
 .cog-mode-dropdown__item:hover {
@@ -563,7 +598,7 @@ const wrapStyle = computed(() => ({
   background: #1e1e3a !important;
   color: #e0e0e0 !important;
   cursor: pointer !important;
-  font-size: 11px !important;
+  font-size: var(--hinge-fs-11, 11px) !important;
   font-family: ui-monospace, monospace !important;
   text-align: left !important;
   overflow: hidden !important;
@@ -571,7 +606,7 @@ const wrapStyle = computed(() => ({
 
 .cog-modal__el-icon {
   flex-shrink: 0 !important;
-  font-size: 12px !important;
+  font-size: var(--hinge-fs-12, 12px) !important;
 }
 
 .cog-modal__el-label {
@@ -583,7 +618,7 @@ const wrapStyle = computed(() => ({
 
 .cog-modal__el-arrow {
   flex-shrink: 0 !important;
-  font-size: 12px !important;
+  font-size: var(--hinge-fs-12, 12px) !important;
   color: #8b949e !important;
 }
 </style>

@@ -2,9 +2,10 @@
 import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
 import { hydrateDrafts, clearDraft } from '../composables/useTaskDraft'
-import { useI18n } from '../composables/useI18n'
+import { API_BASE } from '../const'
+import { useToast } from './composables/useToast'
 import { usePersistedState } from '../composables/usePersistedState'
-import { shortenOutput } from '../utils/shortenOutput'
+import { prettifyMessage, escapeHtml } from '../utils/mdToHtml'
 
 type ExecMode = 'execute' | 'stop' | 'delete'
 
@@ -213,7 +214,7 @@ defineExpose({ getSelectedTasks, stopAll, selectionCount, expandedStem, sendExte
 /** Silent refresh: keeps current loading state, no flicker */
 async function refreshItems() {
   try {
-    const res = await fetch('/api/queue')
+    const res = await fetch(`${API_BASE}/queue`)
     if (!res.ok) return
     const fresh: QueueItem[] = await res.json()
     const wasProcessing = new Set(
@@ -226,7 +227,7 @@ async function refreshItems() {
         clearDraft(stem(item.name))
         // Fetch actual chat.md from server to get agent response
         try {
-          const chatRes = await fetch(`/api/output?file=${encodeURIComponent(item.name)}`)
+          const chatRes = await fetch(`${API_BASE}/output?file=${encodeURIComponent(item.name)}`)
           if (chatRes.ok) {
             const serverContent = await chatRes.text()
             if (serverContent) {
@@ -284,7 +285,7 @@ async function loadItems() {
   loading.value = true
   error.value = ''
   try {
-    const res = await fetch('/api/queue')
+    const res = await fetch(`${API_BASE}/queue`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const fresh: QueueItem[] = await res.json()
     hydrateDrafts(editingContent, fresh.map(i => ({ key: stem(i.name), content: i.content })))
@@ -303,7 +304,7 @@ async function loadItems() {
 }
 
 function remove(name: string) {
-  fetch(`/api/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
+  fetch(`${API_BASE}/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
     .then(() => {
       if (expandedStem.value === stem(name)) expandedStem.value = null
       refreshItems()
@@ -429,7 +430,7 @@ async function sendChat(name: string) {
   chatInputs.value = { ...chatInputs.value, [name]: '' }
 
   // Send via chat endpoint (handles rename + agent internally)
-  const res = await fetch('/api/chat/send', {
+  const res = await fetch(`${API_BASE}/chat/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, message }),
@@ -450,7 +451,7 @@ async function sendChat(name: string) {
 
 /** Cancel a running task (kill agent, revert to wait) */
 async function cancelTask(name: string) {
-  await fetch('/api/cancel', {
+  await fetch(`${API_BASE}/cancel`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -462,7 +463,7 @@ async function cancelTask(name: string) {
 async function stopAll() {
   const processing = items.value.filter(i => i.status === 'processing')
   for (const item of processing) {
-    fetch('/api/cancel', {
+    fetch(`${API_BASE}/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: item.name }),
@@ -481,7 +482,7 @@ async function executeSingle(name: string) {
     const s = stem(name)
     const currentContent = editingContent.value[s] || ''
     const updatedContent = currentContent ? currentContent + `\n\n---\n\n**User:**\n${message}\n` : `**User:**\n${message}\n`
-    await fetch('/api/queue', {
+    await fetch(`${API_BASE}/queue`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: name, content: updatedContent }),
@@ -490,7 +491,7 @@ async function executeSingle(name: string) {
     chatInputs.value = { ...chatInputs.value, [name]: '' }
   }
   // Set status to wait (server won't auto-start — guarded by status !== 'wait')
-  await fetch('/api/queue', {
+  await fetch(`${API_BASE}/queue`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ file: name, status: 'wait' }),
@@ -559,7 +560,7 @@ async function executeSingle(name: string) {
               >
                 <div class="chat-msg__body">
                   <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? lang.user : lang.assistant }}</div>
-                  <div class="chat-msg__text">{{ msg.role === 'assistant' ? shortenOutput(msg.content) : msg.content }}</div>
+                  <div class="chat-msg__text" v-html="msg.role === 'assistant' ? prettifyMessage(msg.content) : escapeHtml(msg.content)"></div>
                 </div>
               </div>
             </div>
@@ -616,7 +617,7 @@ async function executeSingle(name: string) {
 }
 .tab-header {
   padding: 10px 14px;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -633,7 +634,7 @@ async function executeSingle(name: string) {
   border: 1px solid #ff6b6b;
   border-radius: 4px;
   padding: 2px 8px;
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   font-weight: 600;
   text-transform: none;
   letter-spacing: 0;
@@ -646,7 +647,7 @@ async function executeSingle(name: string) {
 .tab-count {
   background: #2a2a4a;
   color: #ccc;
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   padding: 1px 6px;
   border-radius: 8px;
 }
@@ -700,8 +701,8 @@ async function executeSingle(name: string) {
 .qr-card__header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: var(--hinge-spacing-sm, 6px);
+  padding: var(--hinge-spacing-md, 8px) var(--hinge-spacing-sm, 10px);
   cursor: pointer;
   user-select: none;
   transition: background 0.12s;
@@ -710,9 +711,9 @@ async function executeSingle(name: string) {
   background: rgba(88, 166, 255, 0.08);
 }
 .qr-card__icon {
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
   flex-shrink: 0;
-  width: 18px;
+  width: var(--hinge-spacing-xl, 18px);
   text-align: center;
 }
 .qr-card__icon--pulse {
@@ -730,7 +731,7 @@ async function executeSingle(name: string) {
   min-width: 0;
 }
 .qr-card__title {
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   font-weight: 600;
   color: #c9d1d9;
   overflow: hidden;
@@ -738,7 +739,7 @@ async function executeSingle(name: string) {
   white-space: nowrap;
 }
 .qr-card__subtitle {
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   color: #666;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -746,7 +747,7 @@ async function executeSingle(name: string) {
   margin-top: 1px;
 }
 .qr-card__time {
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   color: #666;
   font-family: ui-monospace, monospace;
   flex-shrink: 0;
@@ -757,7 +758,7 @@ async function executeSingle(name: string) {
   border: 1px solid #ff6b6b;
   border-radius: 4px;
   padding: 1px 6px;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
@@ -767,34 +768,34 @@ async function executeSingle(name: string) {
   background: rgba(255, 107, 107, 0.15);
 }
 .qr-card__chevron {
-  font-size: 9px;
+  font-size: var(--hinge-fs-9, 9px);
   color: #888;
   flex-shrink: 0;
   width: 14px;
   text-align: center;
 }
 .qr-card__body {
-  padding: 0 10px 6px;
+  padding: 0 var(--hinge-spacing-sm, 10px) var(--hinge-spacing-sm, 6px);
   border-top: 1px solid #2a2a4a;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--hinge-spacing-sm, 6px);
 }
 
 /* ── Chat UI ── */
 .chat-ui {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-top: 4px;
+  gap: var(--hinge-spacing-xs, 4px);
+  padding-top: var(--hinge-spacing-xs, 4px);
 }
 .chat-history {
-  max-height: 110px;
+  max-height: calc(110px * var(--hinge-scale, 1));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: var(--hinge-spacing-xs, 4px);
+  padding: var(--hinge-spacing-xs, 4px) var(--hinge-spacing-sm, 10px);
 }
 .chat-history--empty {
   min-height: 36px;
@@ -805,7 +806,7 @@ async function executeSingle(name: string) {
   max-width: 100%;
 }
 .chat-msg__avatar {
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   margin-right: 4px;
 }
 .chat-msg__body {
@@ -813,7 +814,7 @@ async function executeSingle(name: string) {
   min-width: 0;
   padding: 6px 10px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   line-height: 1.45;
 }
 .chat-msg--user .chat-msg__body {
@@ -825,7 +826,7 @@ async function executeSingle(name: string) {
   border: 1px solid rgba(35, 134, 54, 0.25);
 }
 .chat-msg__role {
-  font-size: 9px;
+  font-size: var(--hinge-fs-9, 9px);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -841,7 +842,7 @@ async function executeSingle(name: string) {
 /* ── Chat input ── */
 .chat-input-row {
   display: flex;
-  gap: 6px;
+  gap: var(--hinge-spacing-sm, 6px);
   align-items: flex-end;
 }
 .chat-input {
@@ -852,12 +853,12 @@ async function executeSingle(name: string) {
   border: 1px solid #2a2a4a;
   border-radius: 6px;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   line-height: 1.45;
   resize: none;
   box-sizing: border-box;
   min-height: 36px;
-  max-height: 80px;
+  max-height: calc(80px * var(--hinge-scale, 1));
 }
 .chat-input:focus {
   outline: none;
@@ -876,7 +877,7 @@ async function executeSingle(name: string) {
   border: 1px solid #2a2a4a;
   border-radius: 4px;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   line-height: 1.5;
   resize: vertical;
   box-sizing: border-box;
@@ -891,16 +892,16 @@ async function executeSingle(name: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 6px;
+  gap: var(--hinge-spacing-sm, 6px);
 }
 .qr-card__save-spacer {
   flex: 1;
 }
 .qr-btn {
-  padding: 5px 12px;
+  padding: 5px var(--hinge-spacing-sm, 12px);
   border: none;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s;
@@ -915,7 +916,7 @@ async function executeSingle(name: string) {
   border: 1px solid #ff6b6b;
   border-radius: 4px;
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   font-weight: 600;
   cursor: pointer;
   line-height: 1.35;
@@ -930,7 +931,7 @@ async function executeSingle(name: string) {
 .qr-card__select {
   width: 18px;
   text-align: center;
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
   flex-shrink: 0;
   cursor: pointer;
   color: #555;
@@ -945,37 +946,37 @@ async function executeSingle(name: string) {
 
 .qr-card__output {
   border-top: 1px solid #1f6feb33;
-  padding-top: 8px;
+  padding-top: var(--hinge-spacing-md, 8px);
 }
 .qr-card__output-header {
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: #58a6ff;
-  margin-bottom: 6px;
+  margin-bottom: var(--hinge-spacing-sm, 6px);
 }
 .qr-card__output-text {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--hinge-spacing-md, 8px) var(--hinge-spacing-sm, 10px);
   background: #0d1117;
   border: 1px solid #2a2a4a;
   border-radius: 4px;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   line-height: 1.5;
   color: #c9d1d9;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 120px;
+  max-height: calc(120px * var(--hinge-scale, 1));
   overflow-y: auto;
 }
 .qr-card__output-text--live {
   border-color: #da3633;
-  max-height: 190px;
+  max-height: calc(190px * var(--hinge-scale, 1));
 }
 .qr-card__output-loading {
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   color: #666;
   font-style: italic;
   padding: 6px 0;
@@ -996,7 +997,7 @@ async function executeSingle(name: string) {
   to { transform: rotate(360deg); }
 }
 .qr-card__output-empty {
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   color: #666;
   font-style: italic;
   margin: 0;
@@ -1013,8 +1014,119 @@ async function executeSingle(name: string) {
   border-radius: 4px;
 }
 .qr-card__processing-text {
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   color: #ff6b6b;
   font-weight: 600;
+}
+</style>
+
+<!-- Unscoped: v-html rendered markdown in chat messages -->
+<style>
+.chat-msg__text strong {
+  color: #e6edf3;
+  font-weight: 700;
+}
+
+.chat-msg__text em {
+  font-style: italic;
+}
+
+.chat-msg__text code {
+  background: rgba(255,255,255,0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: var(--hinge-fs-11, 11px);
+}
+
+.chat-msg__text pre {
+  background: #0d1117;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  padding: 8px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+
+.chat-msg__text pre code {
+  background: none;
+  padding: 0;
+  font-size: var(--hinge-fs-11, 11px);
+  line-height: 1.4;
+}
+
+.chat-msg__text ul,
+.chat-msg__text ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.chat-msg__text li {
+  margin: 2px 0;
+}
+
+.chat-msg__text a {
+  color: #58a6ff;
+  text-decoration: underline;
+}
+
+.chat-msg__text h3,
+.chat-msg__text h4,
+.chat-msg__text h5,
+.chat-msg__text h6 {
+  margin: 8px 0 4px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #e6edf3;
+}
+
+.chat-msg__text h3 { font-size: var(--hinge-fs-13, 13px); }
+.chat-msg__text h4 { font-size: var(--hinge-fs-12, 12px); }
+.chat-msg__text h5 { font-size: var(--hinge-fs-12, 12px); }
+
+.chat-msg__text blockquote {
+  border-left: 3px solid rgba(255,255,255,0.2);
+  padding-left: 10px;
+  margin: 6px 0;
+  color: rgba(255,255,255,0.55);
+}
+
+.chat-msg__text hr {
+  border: none;
+  border-top: 1px solid #2a2a4a;
+  margin: 8px 0;
+}
+
+.chat-msg__text p {
+  margin: 4px 0;
+}
+
+.chat-msg__text table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: var(--hinge-fs-11, 11px);
+  width: 100%;
+}
+.chat-msg__text th,
+.chat-msg__text td {
+  border: 1px solid #2a2a4a;
+  padding: 3px 6px;
+  text-align: left;
+}
+.chat-msg__text th {
+  background: rgba(255,255,255,0.06);
+  font-weight: 700;
+  color: #e6edf3;
+}
+.chat-msg__text td {
+  color: #c9d1d9;
+}
+.chat-msg__text th[right],
+.chat-msg__text td[right] {
+  text-align: right;
+}
+.chat-msg__text th[center],
+.chat-msg__text td[center] {
+  text-align: center;
 }
 </style>

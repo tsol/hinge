@@ -1,4 +1,5 @@
-import { ref, computed } from 'vue'
+import { API_BASE } from '../const'
+import { ref } from 'vue'
 
 export function useFileSource() {
   const content = ref('')
@@ -12,7 +13,7 @@ export function useFileSource() {
     path.value = filePath
     try {
       const params = new URLSearchParams({ path: filePath })
-      const res = await fetch(`/api/read-file?${params}`)
+      const res = await fetch(`${API_BASE}/read-file?${params}`)
       if (!res.ok) throw new Error(`Failed to read ${filePath}`)
       content.value = await res.text()
     } catch (e: any) {

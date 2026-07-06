@@ -1,6 +1,7 @@
 import type { Plugin, UserConfig, ProxyOptions } from 'vite'
 import { writeFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import { resolve } from 'path'
+import { API_BASE } from './const'
 import * as http from 'http'
 
 // ── Server state (module-level, survives Vite HMR) ────────
@@ -269,13 +270,13 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
     async config(userConfig: UserConfig) {
       // Auto-detect free port if not explicitly set
       port = options.serverPort ?? await findFreePort(5177)
-      // Inject Vite proxy — forward /api/* to the hinge API server
+      // Inject Vite proxy — forward /hinge-api/* to the hinge API server
       const existingProxy = (userConfig.server as any)?.proxy ?? {}
       return {
         server: {
           proxy: {
             ...existingProxy,
-            '/api': {
+            [API_BASE]: {
               target: `http://localhost:${port}`,
               changeOrigin: true,
             } as ProxyOptions,
@@ -301,7 +302,7 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
         // Dynamic import — avoids bundling server.ts in the component build
         import('./server').then(({ startHingeServer }) => {
           startHingeServer(port)
-          console.log(`[hinge] API server on :${port}, proxy /api/* → :${port}`)
+          console.log(`[hinge] API server on :${port}, proxy ${API_BASE}/* → :${port}`)
         }).catch((e) => {
           console.error('[hinge] Failed to start API server:', e)
         })
@@ -329,7 +330,7 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
         }
         if (recovered.length > 0) {
           const req = http.request(
-            { hostname: 'localhost', port, path: '/api/execute', method: 'POST' },
+            { hostname: 'localhost', port, path: `${API_BASE}/execute`, method: 'POST' },
             (r: any) => {
               let body = ''
               r.on('data', (d: string) => body += d)

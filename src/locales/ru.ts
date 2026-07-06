@@ -18,12 +18,15 @@ export const ru: LocaleMessages = {
   add: 'Добавить',
   /** Mode labels */
   execute: 'Выполнить',
+  run: 'Запустить',
+  queue: 'В очередь',
   stop: 'Остановить',
   delete: 'Удалить',
   /** Tabs */
   input: 'Ввод',
   files: 'Файлы',
   source: 'Исходник',
+  settings: 'Настройки',
   /** Files tab */
   projectFiles: 'Файлы проекта',
   /** Source tab / gear */

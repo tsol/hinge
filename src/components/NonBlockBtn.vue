@@ -73,7 +73,7 @@ async function handleClick() {
   background: #21262d;
   color: #c9d1d9;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
 }
 .nbt-btn:disabled {
   opacity: 0.5;
@@ -99,15 +99,15 @@ async function handleClick() {
 }
 .nbt-stage {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   color: #8b949e;
 }
 .nbt-logs {
   margin-top: 8px;
-  max-height: 200px;
+  max-height: calc(200px * var(--hinge-scale, 1));
   overflow-y: auto;
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   line-height: 1.6;
 }
 .nbt-log {

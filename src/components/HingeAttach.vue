@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../const'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from '../composables/useI18n'
 
@@ -32,7 +33,7 @@ function previewImage(name: string) {
 
 function loadFiles() {
   if (!props.folder) return
-  fetch(`/api/attach?folder=${encodeURIComponent(props.folder)}`)
+  fetch(`${API_BASE}/attach?folder=${encodeURIComponent(props.folder)}`)
     .then(r => r.json())
     .then((data: AttachFile[]) => { files.value = data })
     .catch(() => {})
@@ -51,7 +52,7 @@ async function addFile(e: Event) {
   }
 
   try {
-    const res = await fetch(`/api/attach?folder=${encodeURIComponent(props.folder)}`, {
+    const res = await fetch(`${API_BASE}/attach?folder=${encodeURIComponent(props.folder)}`, {
       method: 'POST',
       body: fd,
     })
@@ -67,7 +68,7 @@ async function addFile(e: Event) {
 async function removeFile(name: string) {
   try {
     await fetch(
-      `/api/attach?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(name)}`,
+      `${API_BASE}/attach?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(name)}`,
       { method: 'DELETE' }
     )
     loadFiles()
@@ -134,7 +135,7 @@ function closeDropdown() {
           <button class="attach-dropdown__del" @click.stop="removeFile(f.name)" :title="lang.delete">✕</button>
           <img
             v-if="previewFile === f.name"
-            :src="`/api/attach-file?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(f.name)}`"
+            :src="`${API_BASE}/attach-file?folder=${encodeURIComponent(props.folder)}&file=${encodeURIComponent(f.name)}`"
             class="attach-dropdown__preview"
             @click.stop
           />
@@ -158,7 +159,7 @@ function closeDropdown() {
   border-radius: 50%;
   background: #30363d;
   cursor: pointer;
-  font-size: 15px;
+  font-size: var(--hinge-fs-15, 15px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -176,7 +177,7 @@ function closeDropdown() {
   background: #1f6feb;
 }
 .attach-icon {
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
 }
 .attach-badge {
   position: absolute;
@@ -188,7 +189,7 @@ function closeDropdown() {
   border-radius: 7px;
   background: #da3633;
   color: #fff;
-  font-size: 9px;
+  font-size: var(--hinge-fs-9, 9px);
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -205,11 +206,11 @@ function closeDropdown() {
   border-radius: 8px;
   min-width: 220px;
   max-width: 320px;
-  max-height: 300px;
+  max-height: calc(300px * var(--hinge-scale, 1));
   overflow-y: auto;
   box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   font-family: system-ui, -apple-system, sans-serif;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   color: #e0e0e0;
 }
 
@@ -229,7 +230,7 @@ function closeDropdown() {
 
 .attach-dropdown__header {
   padding: 8px 12px;
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -251,7 +252,7 @@ function closeDropdown() {
   background: rgba(88, 166, 255, 0.1);
 }
 .attach-dropdown__plus {
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
   width: 16px;
   text-align: center;
 }
@@ -280,7 +281,7 @@ function closeDropdown() {
   background: rgba(88, 166, 255, 0.1);
 }
 .attach-dropdown__file-icon {
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
   flex-shrink: 0;
 }
 .attach-dropdown__file-name {
@@ -289,12 +290,12 @@ function closeDropdown() {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, monospace;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   color: #c9d1d9;
 }
 .attach-dropdown__file-size {
   color: #666;
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   flex-shrink: 0;
 }
 .attach-dropdown__del {
@@ -302,7 +303,7 @@ function closeDropdown() {
   border: none;
   color: #f85149;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   padding: 2px 4px;
   border-radius: 3px;
   transition: background 0.12s;
@@ -314,7 +315,7 @@ function closeDropdown() {
 }
 .attach-dropdown__preview {
   width: 100%;
-  max-height: 200px;
+  max-height: calc(200px * var(--hinge-scale, 1));
   object-fit: contain;
   border-radius: 4px;
   margin-top: 4px;

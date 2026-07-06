@@ -1,4 +1,5 @@
-import { ref, watch } from 'vue'
+import { API_BASE } from '../const'
+import { ref, onMounted } from 'vue'
 import { usePersistedState } from './usePersistedState'
 
 export interface FileEntry {
@@ -29,7 +30,7 @@ export function useFileTree() {
 
   async function loadDir(dirPath: string): Promise<FileEntry[]> {
     const params = new URLSearchParams({ path: dirPath })
-    const res = await fetch(`/api/list-dir?${params}`)
+    const res = await fetch(`${API_BASE}/list-dir?${params}`)
     if (!res.ok) throw new Error(`Failed to list ${dirPath}`)
     return res.json()
   }

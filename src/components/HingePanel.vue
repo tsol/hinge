@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { API_BASE } from '../const'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { HingeTarget } from '../types/target'
 import type { TaskModel } from '../composables/useTaskModel'
@@ -22,6 +23,7 @@ import yaml from 'highlight.js/lib/languages/yaml'
 import scss from 'highlight.js/lib/languages/scss'
 import bash from 'highlight.js/lib/languages/bash'
 import HingeMic from './HingeMic.vue'
+import { useFontScale } from '../composables/useFontScale'
 
 hljs.registerLanguage('typescript', typescript)
 hljs.registerLanguage('javascript', javascript)
@@ -56,7 +58,7 @@ const note = computed({
 })
 
 const { state: panel } = usePersistedState('panel', {
-  activeTab: 'input' as 'input' | 'files' | 'source',
+  activeTab: 'input' as 'input' | 'files' | 'source' | 'settings',
   lastFile: '',
 })
 const { state: panelExec } = usePersistedState('panelExecMode', {
@@ -66,8 +68,8 @@ const { state: drawerW } = usePersistedState('drawerWidth', {
   width: 380,
 })
 const activeTab = computed({
-  get: () => panel.activeTab as 'input' | 'files' | 'source',
-  set: (v: 'input' | 'files' | 'source') => { panel.activeTab = v },
+  get: () => panel.activeTab as 'input' | 'files' | 'source' | 'settings',
+  set: (v: 'input' | 'files' | 'source' | 'settings') => { panel.activeTab = v },
 })
 
 const fileMentioned = ref(false)
@@ -127,7 +129,7 @@ function startLogPoll(folder: string) {
   stopLogPoll()
   logPollTimer.value = setInterval(async () => {
     try {
-      const res = await fetch(`/api/log?file=${encodeURIComponent(folder)}`)
+      const res = await fetch(`${API_BASE}/log?file=${encodeURIComponent(folder)}`)
       if (!res.ok) {
         if (res.status === 404) stopLogPoll() // task renamed to _done → done
         return
@@ -182,7 +184,7 @@ function startResize(e: PointerEvent) {
 function onAdd() {
   if (editingFile.value) {
     // Save edit — increment key after PATCH completes
-    fetch('/api/queue', {
+    fetch(`${API_BASE}/queue`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: editingFile.value, content: note.value }),
@@ -263,18 +265,18 @@ async function onExecuteByMode() {
 
   if (execMode.value === 'execute') {
     for (const name of selected) {
-      await fetch('/api/queue', {
+      await fetch(`${API_BASE}/queue`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file: name, status: 'wait' }),
       })
     }
     // Trigger agent to pick up the first _wait task
-    await fetch('/api/queue/run', { method: 'POST' })
+    await fetch(`${API_BASE}/queue/run`, { method: 'POST' })
   } else if (execMode.value === 'stop') {
     for (const name of selected) {
       try {
-        const res = await fetch('/api/cancel', {
+        const res = await fetch(`${API_BASE}/cancel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name }),
@@ -286,7 +288,7 @@ async function onExecuteByMode() {
     }
   } else if (execMode.value === 'delete') {
     for (const name of selected) {
-      await fetch(`/api/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await fetch(`${API_BASE}/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
     }
   }
 
@@ -472,7 +474,7 @@ async function saveSourceFile() {
   if (!path) return
   sourceSaving.value = true
   try {
-    await fetch('/api/write-file', {
+    await fetch(`${API_BASE}/write-file`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, content: sourceEditingContent.value }),
@@ -562,7 +564,6 @@ onUnmounted(() => {
 })
 
 // ─── Prompt settings ─────────────────────
-const promptModal = ref(false)
 const promptText = ref('')
 const promptLoading = ref(false)
 const promptSaving = ref(false)
@@ -570,7 +571,7 @@ const promptSaving = ref(false)
 async function loadPrompt() {
   promptLoading.value = true
   try {
-    const res = await fetch('/api/prompt')
+    const res = await fetch(`${API_BASE}/prompt`)
     promptText.value = await res.text()
   } catch {
     promptText.value = lang.value.failedLoadPrompt
@@ -581,12 +582,11 @@ async function loadPrompt() {
 async function savePrompt() {
   promptSaving.value = true
   try {
-    await fetch('/api/prompt', {
+    await fetch(`${API_BASE}/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: promptText.value }),
     })
-    promptModal.value = false
   } catch { /* ignore */ }
   promptSaving.value = false
 }
@@ -594,16 +594,21 @@ async function savePrompt() {
 async function resetPrompt() {
   promptSaving.value = true
   try {
-    await fetch('/api/prompt', { method: 'DELETE' })
+    await fetch(`${API_BASE}/prompt`, { method: 'DELETE' })
     await loadPrompt()
   } catch { /* ignore */ }
   promptSaving.value = false
 }
 
-function openPromptModal() {
-  loadPrompt()
-  promptModal.value = true
-}
+// Load prompt when settings tab is opened
+watch(activeTab, (tab) => {
+  if (tab === 'settings' && !promptText.value) {
+    loadPrompt()
+  }
+})
+
+// ── Font scale ──
+const { level: fontLevel, setLevel: setFontLevel, labels: fontLabels, levels: fontLevels } = useFontScale()
 </script>
 
 <template>
@@ -613,9 +618,8 @@ function openPromptModal() {
       <div ref="drawerRef" class="drawer" :style="{ width: drawerWidth + 'px' }">
         <!-- Tabs -->
         <div class="drawer-tabs">
-          <button class="drawer-settings" @click="openPromptModal" :title="lang.settingsTooltip">⚙</button>
           <button
-            v-for="id in (['input', 'files', 'source'] as const)"
+            v-for="id in (['input', 'files', 'source', 'settings'] as const)"
             :key="id"
             class="drawer-tab"
             :class="{ 'drawer-tab--active': activeTab === id }"
@@ -797,7 +801,7 @@ function openPromptModal() {
               @input="sourceEditingContent = ($event.target as HTMLTextAreaElement).value"
               spellcheck="false"
             ></textarea>
-            <img v-else-if="isImage" :src="`/api/raw-file?path=${encodeURIComponent(selection.filePath)}`" class="source-image" />
+            <img v-else-if="isImage" :src="`${API_BASE}/raw-file?path=${encodeURIComponent(selection.filePath)}`" class="source-image" />
             <pre v-else class="source-code" v-html="highlightedCode"></pre>
             <div v-if="sourceEditMode" class="source-save-row">
               <button
@@ -808,52 +812,68 @@ function openPromptModal() {
             </div>
           </div>
         </div>
+        <!-- Tab: Settings -->
+        <div v-if="activeTab === 'settings'" class="tab-content">
+          <div class="settings-scroll">
+            <!-- Language -->
+            <div class="settings-row">
+              <div class="settings-row__label">{{ lang.lang }}</div>
+              <div class="settings-row__control">
+                <button
+                  class="settings-btn"
+                  :class="{ 'settings-btn--active': currentLocale === 'en' }"
+                  @click="setLocale('en')"
+                >EN</button>
+                <button
+                  class="settings-btn"
+                  :class="{ 'settings-btn--active': currentLocale === 'ru' }"
+                  @click="setLocale('ru')"
+                >RU</button>
+              </div>
+            </div>
+            <!-- Font Size -->
+            <div class="settings-row">
+              <div class="settings-row__label">Font Size</div>
+              <div class="settings-row__control">
+                <button
+                  v-for="lvl in fontLevels"
+                  :key="lvl"
+                  class="settings-btn"
+                  :class="{ 'settings-btn--active': fontLevel === lvl }"
+                  @click="setFontLevel(lvl)"
+                >{{ fontLabels[lvl] }}</button>
+              </div>
+            </div>
+            <!-- System Prompt -->
+            <div class="settings-row settings-row--full">
+              <div class="settings-row__label">{{ lang.systemPrompt }}</div>
+              <div class="settings-row__body" v-if="promptLoading">
+                <p class="drawer-muted">{{ lang.promptLoading }}</p>
+              </div>
+              <div class="settings-row__body" v-else>
+                <textarea
+                  class="settings-editor"
+                  :value="promptText"
+                  @input="promptText = ($event.target as HTMLTextAreaElement).value"
+                  spellcheck="false"
+                ></textarea>
+              </div>
+              <div class="settings-row__actions">
+                <button class="drawer-btn drawer-btn--prompt-reset" @click="resetPrompt" :disabled="promptSaving">
+                  {{ promptSaving ? lang.saving : lang.reset }}
+                </button>
+                <button class="drawer-btn drawer-btn--prompt-save" @click="savePrompt" :disabled="promptSaving || promptLoading">
+                  {{ promptSaving ? lang.saving : lang.save }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div
           class="drawer-resize-handle"
           :class="{ 'drawer-resize-handle--active': resizing }"
           @pointerdown="startResize"
         ></div>
-      </div>
-
-      <!-- Prompt settings modal -->
-      <div v-if="promptModal" class="prompt-overlay" @click.self="promptModal = false">
-        <div class="prompt-modal">
-          <div class="prompt-modal__header">
-            <span>{{ lang.systemPrompt }}</span>
-            <div class="prompt-modal__lang">
-              <button
-                class="lang-btn"
-                :class="{ 'lang-btn--active': currentLocale === 'en' }"
-                @click="setLocale('en')"
-              >EN</button>
-              <button
-                class="lang-btn"
-                :class="{ 'lang-btn--active': currentLocale === 'ru' }"
-                @click="setLocale('ru')"
-              >RU</button>
-            </div>
-            <button class="drawer-close" @click="promptModal = false">✕</button>
-          </div>
-          <div class="prompt-modal__body" v-if="promptLoading">
-            <p class="drawer-muted">{{ lang.promptLoading }}</p>
-          </div>
-          <div class="prompt-modal__body" v-else>
-            <textarea
-              class="prompt-editor"
-              :value="promptText"
-              @input="promptText = ($event.target as HTMLTextAreaElement).value"
-              spellcheck="false"
-            ></textarea>
-          </div>
-          <div class="prompt-modal__footer">
-            <button class="drawer-btn drawer-btn--prompt-reset" @click="resetPrompt" :disabled="promptSaving">
-              {{ promptSaving ? lang.saving : lang.reset }}
-            </button>
-            <button class="drawer-btn drawer-btn--prompt-save" @click="savePrompt" :disabled="promptSaving || promptLoading">
-              {{ promptSaving ? lang.saving : lang.save }}
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   </Teleport>
@@ -871,7 +891,7 @@ function openPromptModal() {
   display: flex;
   flex-direction: column;
   font-family: system-ui, -apple-system, sans-serif;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   overflow: hidden;
 }
 
@@ -885,9 +905,9 @@ function openPromptModal() {
   background: transparent;
   border: none;
   color: #888;
-  font-size: 16px;
+  font-size: var(--hinge-fs-16, 16px);
   cursor: pointer;
-  padding: 10px 12px;
+  padding: var(--hinge-spacing-sm, 10px) var(--hinge-spacing-sm, 12px);
   line-height: 1;
   transition: color 0.15s;
   flex-shrink: 0;
@@ -898,11 +918,11 @@ function openPromptModal() {
 
 .drawer-tab {
   flex: 1;
-  padding: 10px 8px;
+  padding: var(--hinge-spacing-sm, 10px) var(--hinge-spacing-md, 8px);
   background: transparent;
   border: none;
   color: #888;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   font-weight: 600;
   cursor: pointer;
   text-transform: uppercase;
@@ -922,7 +942,7 @@ function openPromptModal() {
 
 .tab-header {
   padding: 10px 14px;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   font-weight: 600;
   letter-spacing: 0.5px;
   color: #888;
@@ -942,7 +962,7 @@ function openPromptModal() {
   background: transparent;
   border: none;
   color: #888;
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
@@ -966,7 +986,7 @@ function openPromptModal() {
   background: transparent;
   border: none;
   color: #888;
-  font-size: 14px;
+  font-size: var(--hinge-fs-14, 14px);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
@@ -987,7 +1007,7 @@ function openPromptModal() {
   overflow: hidden;
   white-space: nowrap;
   color: #666;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   font-weight: 500;
 }
 
@@ -996,13 +1016,13 @@ function openPromptModal() {
   white-space: nowrap;
   color: #e0e0e0;
   font-weight: 700;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
 }
 
 .tab-header__file--muted {
   color: #666;
   font-weight: 500;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
 }
 
 .tab-content {
@@ -1094,21 +1114,20 @@ function openPromptModal() {
 
 .textarea-wrap {
   position: relative;
-  margin-top: 8px;
+  margin-top: var(--hinge-spacing-md, 8px);
 }
 
 .drawer-textarea {
   width: 100%;
-  padding: 10px;
+  padding: var(--hinge-spacing-sm, 10px);
   border: 1px solid #2a2a4a;
   border-radius: 6px;
   background: #16162a;
   color: #e0e0e0;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   min-height: 60px;
   box-sizing: border-box;
-  white-space: pre !important;
   overflow: auto !important;
 }
 
@@ -1119,13 +1138,13 @@ function openPromptModal() {
 
 .input-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--hinge-spacing-md, 8px);
   justify-content: space-between;
 }
 
 .input-actions__group {
   display: flex;
-  gap: 4px;
+  gap: var(--hinge-spacing-xs, 4px);
   align-items: center;
 }
 
@@ -1140,7 +1159,7 @@ function openPromptModal() {
 .drawer-btn--cancel {
   background: #30363d;
   color: #ccc;
-  padding: 8px 12px;
+  padding: var(--hinge-spacing-md, 8px) var(--hinge-spacing-sm, 12px);
 }
 
 /* ── Segmented Button ── */
@@ -1151,10 +1170,10 @@ function openPromptModal() {
 }
 
 .segmented-btn__main {
-  padding: 8px 16px;
+  padding: var(--hinge-spacing-md, 8px) var(--hinge-spacing-lg, 16px);
   border: none;
   border-radius: 6px 0 0 6px;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s, background 0.15s;
@@ -1180,7 +1199,7 @@ function openPromptModal() {
   padding: 8px 10px;
   border: none;
   border-radius: 0 6px 6px 0;
-  font-size: 9px;
+  font-size: var(--hinge-fs-9, 9px);
   cursor: pointer;
   transition: opacity 0.15s, background 0.15s;
   color: #fff;
@@ -1232,7 +1251,7 @@ function openPromptModal() {
   border: none;
   background: transparent;
   color: #c9d1d9;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   font-weight: 500;
   cursor: pointer;
   text-align: left;
@@ -1248,10 +1267,10 @@ function openPromptModal() {
 }
 
 .drawer-btn {
-  padding: 8px 16px;
+  padding: var(--hinge-spacing-md, 8px) var(--hinge-spacing-lg, 16px);
   border: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s;
@@ -1264,7 +1283,7 @@ function openPromptModal() {
 .drawer-btn--back {
   background: transparent;
   color: #58a6ff;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   padding: 4px 10px;
 }
 
@@ -1281,11 +1300,11 @@ function openPromptModal() {
 .file-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 14px;
+  gap: var(--hinge-spacing-xs, 4px);
+  padding: 3px var(--hinge-spacing-md, 14px);
   cursor: pointer;
   transition: background 0.12s;
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   font-family: ui-monospace, 'SF Mono', monospace;
   user-select: none;
 }
@@ -1301,9 +1320,9 @@ function openPromptModal() {
 }
 
 .file-toggle {
-  width: 12px;
+  width: var(--hinge-spacing-sm, 12px);
   text-align: center;
-  font-size: 9px;
+  font-size: var(--hinge-fs-9, 9px);
   color: #888;
   flex-shrink: 0;
 }
@@ -1313,9 +1332,9 @@ function openPromptModal() {
 }
 
 .file-icon {
-  font-size: 13px;
+  font-size: var(--hinge-fs-13, 13px);
   flex-shrink: 0;
-  width: 18px;
+  width: var(--hinge-spacing-xl, 18px);
   text-align: center;
 }
 
@@ -1327,9 +1346,9 @@ function openPromptModal() {
 }
 
 .file-check {
-  width: 14px;
+  width: var(--hinge-spacing-md, 14px);
   text-align: center;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   flex-shrink: 0;
   cursor: pointer;
   color: #555;
@@ -1378,7 +1397,7 @@ function openPromptModal() {
   margin: 0;
   padding: 12px 14px;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   line-height: 1.5;
   color: #c9d1d9;
   white-space: pre;
@@ -1396,7 +1415,7 @@ function openPromptModal() {
   border: none;
   border-top: 1px solid #2a2a4a;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   line-height: 1.5;
   resize: none;
   box-sizing: border-box;
@@ -1418,7 +1437,7 @@ function openPromptModal() {
   padding: 6px 16px;
   border: none;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   font-weight: 600;
   cursor: pointer;
 }
@@ -1463,9 +1482,10 @@ function openPromptModal() {
   background: #0d2818;
   border: 1px solid #238636;
   position: relative;
-  max-height: 200px;
+  max-height: calc(200px * var(--hinge-scale, 1));
   overflow-y: auto;
 }
+
 .exec-result--err {
   background: #2d0f0f;
   border-color: #da3633;
@@ -1478,12 +1498,12 @@ function openPromptModal() {
   border: none;
   color: #888;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   padding: 2px 4px;
 }
 .exec-result__text {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   line-height: 1.5;
   font-family: ui-monospace, 'SF Mono', monospace;
   white-space: pre-wrap;
@@ -1492,61 +1512,42 @@ function openPromptModal() {
 }
 
 /* Settings gear button */
-.drawer-settings {
-  background: transparent;
-  border: none;
-  color: #666;
-  font-size: 15px;
-  cursor: pointer;
-  padding: 10px 8px;
-  line-height: 1;
-  transition: color 0.15s;
-  flex-shrink: 0;
-}
-.drawer-settings:hover {
-  color: #ccc;
-}
-
-/* Prompt modal overlay */
-.prompt-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200000;
-}
-.prompt-modal {
-  background: #1a1a2e;
-  border: 1px solid #2a2a4a;
-  border-radius: 10px;
-  width: min(90vw, 600px);
-  max-height: 80vh;
+/* ── Settings tab ── */
+.settings-scroll {
+  flex: 1;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  gap: var(--hinge-spacing-md, 8px);
+  padding: var(--hinge-spacing-sm, 10px) var(--hinge-spacing-md, 14px);
 }
-.prompt-modal__header {
+.settings-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid #2a2a4a;
-  font-size: 14px;
+  gap: var(--hinge-spacing-sm, 8px);
+}
+.settings-row--full {
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.settings-row__label {
+  font-size: var(--hinge-fs-12, 12px);
   font-weight: 600;
-  color: #e0e0e0;
+  color: #bbb;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.prompt-modal__lang {
+.settings-row__control {
   display: flex;
-  gap: 4px;
-  margin: 0 8px;
+  gap: var(--hinge-spacing-xs, 4px);
 }
-.lang-btn {
+.settings-btn {
   background: #2a2a4a;
   border: 1px solid transparent;
   color: #888;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 4px;
@@ -1554,47 +1555,44 @@ function openPromptModal() {
   transition: all 0.15s;
   line-height: 1.4;
 }
-.lang-btn:hover {
+.settings-btn:hover {
   color: #e0e0e0;
   border-color: #4a4a6a;
 }
-.lang-btn--active {
+.settings-btn--active {
   background: #0d6efd;
   color: #fff;
   border-color: #0d6efd;
 }
-.prompt-modal__body {
+.settings-row__body {
   flex: 1;
-  overflow: hidden;
-  padding: 12px 16px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
-.prompt-editor {
+.settings-editor {
   width: 100%;
   flex: 1;
-  min-height: 200px;
-  padding: 10px;
+  min-height: 120px;
+  padding: var(--hinge-spacing-sm, 10px);
   background: #0d1117;
   color: #c9d1d9;
   border: 1px solid #2a2a4a;
   border-radius: 6px;
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 12px;
+  font-size: var(--hinge-fs-12, 12px);
   line-height: 1.5;
   resize: vertical;
   box-sizing: border-box;
 }
-.prompt-editor:focus {
+.settings-editor:focus {
   outline: none;
   border-color: #58a6ff;
 }
-.prompt-modal__footer {
+.settings-row__actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid #2a2a4a;
+  gap: var(--hinge-spacing-md, 8px);
 }
 .drawer-btn--prompt-save {
   background: #1f6feb;
@@ -1616,16 +1614,16 @@ function openPromptModal() {
 .chips-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 4px;
+  gap: var(--hinge-spacing-xs, 4px);
+  margin-bottom: var(--hinge-spacing-xs, 4px);
 }
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
+  gap: var(--hinge-spacing-xs, 3px);
+  padding: 2px var(--hinge-spacing-sm, 6px);
   border-radius: 10px;
-  font-size: 11px;
+  font-size: var(--hinge-fs-11, 11px);
   font-family: ui-monospace, monospace;
   max-width: 100%;
   overflow: hidden;
@@ -1642,7 +1640,7 @@ function openPromptModal() {
 }
 .chip__type {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
 }
 .chip__label {
   overflow: hidden;
@@ -1658,7 +1656,7 @@ function openPromptModal() {
   color: inherit;
   cursor: pointer;
   padding: 0;
-  font-size: 10px;
+  font-size: var(--hinge-fs-10, 10px);
   opacity: 0.6;
   line-height: 1;
 }

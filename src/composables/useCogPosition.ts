@@ -1,4 +1,5 @@
-import { computed, onMounted, onUnmounted, reactive } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
+import { usePersistedState } from './usePersistedState'
 import { COG_SIZE } from '../constants'
 
 export interface CogPosition {
@@ -14,18 +15,17 @@ function getViewportBounds() {
   }
 }
 
+const COG_MARGIN = 16
+
 export function useCogPosition() {
-  const position = reactive<CogPosition>({ x: 0, y: 0 })
+  const { state: position } = usePersistedState('cog', {
+    x: Math.max(0, getViewportBounds().width - COG_SIZE - COG_MARGIN),
+    y: Math.max(0, getViewportBounds().height - COG_SIZE - COG_MARGIN),
+  })
 
   const cogStyle = computed(() => ({
     transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
   }))
-
-  function bottomRightPosition() {
-    const { width, height } = getViewportBounds()
-    position.x = Math.max(0, width - COG_SIZE - 16)
-    position.y = Math.max(0, height - COG_SIZE - 16)
-  }
 
   function clampPosition() {
     const { width, height } = getViewportBounds()
@@ -36,7 +36,6 @@ export function useCogPosition() {
   }
 
   onMounted(() => {
-    bottomRightPosition()
     clampPosition()
     window.addEventListener('resize', clampPosition)
     window.visualViewport?.addEventListener('resize', clampPosition)

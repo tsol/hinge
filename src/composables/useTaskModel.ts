@@ -1,4 +1,5 @@
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, toRef, type ComputedRef, type Ref } from 'vue'
+import { usePersistedState } from './usePersistedState'
 import {
   type Section,
   parseQueueMarkdown,
@@ -18,32 +19,29 @@ export interface TaskModel {
   components: ComputedRef<Section[]>
   files: ComputedRef<Section[]>
 
-  /** New reactive model: plain text separate from attachments */
+  /** Persisted reactive state */
   text: Ref<string>
   attachments: Ref<Attachment[]>
 
-  /** Check if a component is in the model */
   hasComponent(name: string): boolean
-  /** Check if a file path is in the model */
   hasFile(path: string): boolean
   hasPage(_url: string): boolean
 
-  /** Toggle — add if missing, remove if exists */
   toggleComponent(name: string, fields?: Record<string, string>): void
-  /** Upsert — add if missing */
   upsertComponent(name: string, fields?: Record<string, string>): void
   removeComponent(name: string): void
 
   upsertFile(path: string): void
   removeFile(path: string): void
-
-  /** Remove any attachment by name */
   removeAttachment(name: string): void
 
   /** Serialize to markdown for queue submission */
   serialize(): string
   /** Deserialize from markdown (loading existing task content) */
   deserialize(md: string): void
+
+  /** Clear persisted state (reset to defaults) */
+  clearPersisted(): void
 }
 
 /** Convert Attachment[] + text → Section[] (backward compat) */
@@ -63,13 +61,25 @@ function toSections(attachments: Attachment[], text: string): Section[] {
   return sections
 }
 
+let _modelSingleton: ReturnType<typeof _createModel> | null = null
+
 /**
- * Reactive model: attachments (components/files) + text stored as plain arrays,
- * not embedded in markdown. Backward-compatible computed Section[] for legacy consumers.
+ * Reactive model persisted across page reloads.
+ * Singleton — survives Vite HMR by caching the instance.
  */
 export function useTaskModel(): TaskModel {
-  const text = ref('')
-  const attachments = ref<Attachment[]>([])
+  if (!_modelSingleton) _modelSingleton = _createModel()
+  return _modelSingleton
+}
+
+function _createModel(): TaskModel {
+  const { state, clear } = usePersistedState('model', {
+    text: '',
+    attachments: [] as Attachment[],
+  })
+
+  const text: Ref<string> = toRef(state, 'text')
+  const attachments: Ref<Attachment[]> = toRef(state, 'attachments')
 
   const sections = computed(() => toSections(attachments.value, text.value))
   const pages = computed<Section[]>(() => [])
@@ -83,7 +93,7 @@ export function useTaskModel(): TaskModel {
     return attachments.value.some(a => a.type === 'file' && a.name === path)
   }
   function hasPage(_url: string): boolean {
-    return false // pages no longer tracked separately
+    return false
   }
 
   function toggleComponent(name: string, fields?: Record<string, string>) {
@@ -150,5 +160,6 @@ export function useTaskModel(): TaskModel {
     toggleComponent, upsertComponent, removeComponent,
     upsertFile, removeFile, removeAttachment,
     serialize, deserialize,
+    clearPersisted: clear,
   }
 }

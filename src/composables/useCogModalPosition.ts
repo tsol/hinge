@@ -1,6 +1,7 @@
-import { computed, ref, watch, type Ref } from 'vue'
+import { computed, watch, toRef, type Ref } from 'vue'
 import { COG_SIZE } from '../constants'
 import { useSmoothFollow } from './useSmoothFollow'
+import { usePersistedState } from './usePersistedState'
 
 const EST_W = 280
 const EST_H = 220
@@ -28,7 +29,10 @@ function getViewport() {
  * @param posY  Reactive Ref<number> for the gear's viewport Y
  */
 export function useCogModalPosition(posX: Ref<number>, posY: Ref<number>) {
-  const modalOpen = ref(false)
+  const { state: cogUi } = usePersistedState('cogUi', {
+    modalOpen: false,
+  })
+  const modalOpen = toRef(cogUi, 'modalOpen')
 
   // Target top-left corner of the modal:
   //   Horizontal: centered on gear, clamped to viewport edges

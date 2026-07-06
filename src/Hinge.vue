@@ -39,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import './host'
 import HingeMenuToggle from './components/HingeMenuToggle.vue'
 import HingeCog from './components/HingeCog.vue'
@@ -50,13 +50,23 @@ import { useCogPosition } from './composables/useCogPosition'
 import { useTargetComponent } from './composables/useTargetComponent'
 import { useTaskModel } from './composables/useTaskModel'
 import { useToast } from './composables/useToast'
+import { usePersistedState } from './composables/usePersistedState'
 
-const isOpen = ref(false)
 const alwaysOnTop = ref(false)
 
 onMounted(() => {
   alwaysOnTop.value = !!(window as any).__HINGE_DEFAULT_PROJECT
 })
+
+const { state: ui } = usePersistedState('ui', {
+  isOpen: false,
+  hasFocus: false,
+})
+const isOpen = computed({
+  get: () => ui.isOpen as boolean,
+  set: (v: boolean) => { ui.isOpen = v },
+})
+
 
 const { position, cogStyle, clampPosition } = useCogPosition()
 const {

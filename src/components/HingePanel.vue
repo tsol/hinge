@@ -7,6 +7,7 @@ import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
 import { syncHighlights } from '../composables/useElementHighlights'
 import { useI18n } from '../composables/useI18n'
+import { usePersistedState } from '../composables/usePersistedState'
 import HingeTabQueue from './HingeTabQueue.vue'
 import HingeAttach from './HingeAttach.vue'
 import hljs from 'highlight.js/lib/core'
@@ -54,7 +55,13 @@ const note = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-const activeTab = ref<'input' | 'files' | 'source'>('input')
+const { state: panel } = usePersistedState('panel', {
+  activeTab: 'input' as 'input' | 'files' | 'source',
+})
+const activeTab = computed({
+  get: () => panel.activeTab as 'input' | 'files' | 'source',
+  set: (v: 'input' | 'files' | 'source') => { panel.activeTab = v },
+})
 
 const fileMentioned = ref(false)
 
@@ -183,11 +190,6 @@ function onAdd() {
       editingNoteRef.value = ''
       queueRefreshKey.value++
     })
-  } else if (queueRef.value?.expandedStem) {
-    // Accordion is open — send text as chat message to the expanded task
-    queueRef.value.sendExternalChat(note.value)
-    note.value = ''
-    nextTick(autoResizeTextarea)
   } else {
     // Delegate to parent (Hinge.vue sends the POST).
     // Key increment happens via onSuccess callback after POST completes.

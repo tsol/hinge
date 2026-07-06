@@ -27,7 +27,7 @@ defineProps<{
   padding: 16px 20px;
 }
 .nested-block__header {
-  font-size: 13px;
+  font-size: calc(13px * var(--dev-fs));
   font-weight: 600;
   color: #8b949e;
   text-transform: uppercase;

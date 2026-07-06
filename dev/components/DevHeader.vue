@@ -45,18 +45,18 @@ const text = computed(() => t(locale))
   gap: 10px;
 }
 .dev-header__logo {
-  font-size: 32px;
+  font-size: calc(32px * var(--dev-fs));
   line-height: 1;
 }
 .dev-header h1 {
-  font-size: 32px;
+  font-size: calc(32px * var(--dev-fs));
   color: #f0f6fc;
   font-weight: 700;
   letter-spacing: -0.5px;
 }
 .dev-sub {
   color: #8b949e;
-  font-size: 14px;
+  font-size: calc(14px * var(--dev-fs));
   line-height: 1.6;
   max-width: 580px;
   margin: 0 auto;
@@ -72,7 +72,7 @@ const text = computed(() => t(locale))
   display: inline-block;
   padding: 4px 12px;
   border-radius: 100px;
-  font-size: 11px;
+  font-size: calc(11px * var(--dev-fs));
   font-weight: 600;
   letter-spacing: 0.3px;
   background: #1c2333;

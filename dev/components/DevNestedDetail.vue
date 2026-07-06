@@ -11,7 +11,7 @@ defineProps<{ detail: string }>()
 <style scoped>
 .nested-detail {
   padding: 2px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--dev-fs));
   color: #8b949e;
 }
 .nested-detail code {

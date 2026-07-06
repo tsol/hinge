@@ -23,6 +23,6 @@ defineProps<{ name: string; details: string[] }>()
 .nested-item__name {
   color: #f0f6fc;
   font-weight: 600;
-  font-size: 12px;
+  font-size: calc(12px * var(--dev-fs));
 }
 </style>

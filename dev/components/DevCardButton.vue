@@ -14,7 +14,7 @@ defineEmits<{ select: [] }>()
   display: inline-block; position: static;
   flex-direction: row;
   padding: 6px 14px; margin: 0;
-  font-size: 13px; font-weight: 400;
+  font-size: calc(13px * var(--dev-fs)); font-weight: 400;
   color: #c9d1d9; background: #21262d; border: 1px solid #30363d;
   border-radius: 6px;
   width: auto; height: auto;

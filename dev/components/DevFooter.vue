@@ -17,19 +17,19 @@ defineProps<{ text: string }>()
   border: 1px solid #30363d;
   border-radius: 8px;
   padding: 16px 20px;
-  font-size: 13px;
+  font-size: calc(13px * var(--dev-fs));
   margin-bottom: 40px;
 }
 .dev-info__desc {
   color: #8b949e;
   line-height: 1.7;
-  font-size: 13px;
+  font-size: calc(13px * var(--dev-fs));
 }
 .dev-info__footnote {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid #21262d;
-  font-size: 13px;
+  font-size: calc(13px * var(--dev-fs));
 }
 .dev-info__link {
   color: #58a6ff;

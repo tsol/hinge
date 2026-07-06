@@ -38,13 +38,13 @@ defineEmits<{ select: [] }>()
   box-shadow: 0 0 0 1px #58a6ff, 0 4px 16px rgba(88, 166, 255, 0.08);
 }
 .dev-card__title {
-  font-size: 15px;
+  font-size: calc(15px * var(--dev-fs));
   color: #f0f6fc;
   margin-bottom: 8px;
   line-height: 1.3;
 }
 .dev-card__desc {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--dev-fs));
   color: #8b949e;
   margin-bottom: 14px;
   line-height: 1.55;
@@ -54,7 +54,7 @@ defineEmits<{ select: [] }>()
   background: #0d1117;
   padding: 1px 5px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--dev-fs));
   color: #f0f6fc;
 }
 </style>

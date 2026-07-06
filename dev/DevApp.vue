@@ -47,7 +47,9 @@ const text = computed(() => t(locale))
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
+  --dev-fs: 1.35;
   font-family: system-ui, -apple-system, sans-serif;
+  font-size: calc(16px * var(--dev-fs));
   background: #0d1117;
   color: #c9d1d9;
   min-height: 100vh;
@@ -61,13 +63,13 @@ body {
   margin-bottom: 40px;
 }
 .dev-section-title {
-  font-size: 18px;
+  font-size: calc(18px * var(--dev-fs));
   font-weight: 600;
   color: #f0f6fc;
   margin-bottom: 6px;
 }
 .dev-section-desc {
-  font-size: 14px;
+  font-size: calc(14px * var(--dev-fs));
   color: #8b949e;
   line-height: 1.7;
   max-width: 640px;

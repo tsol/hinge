@@ -35,7 +35,7 @@ defineEmits<{ 'update:locale': [value: Locale] }>()
 }
 .lang-btn {
   padding: 4px 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--dev-fs));
   font-weight: 600;
   letter-spacing: 0.5px;
   color: #8b949e;

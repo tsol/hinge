@@ -26,7 +26,7 @@ defineEmits<{ select: [] }>()
   padding: 14px 20px;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-  font-size: 14px;
+  font-size: calc(14px * var(--dev-fs));
 }
 .dev-list-item:hover {
   border-color: #58a6ff;
@@ -46,7 +46,7 @@ defineEmits<{ select: [] }>()
   border-radius: 50%;
   background: #21262d;
   color: #8b949e;
-  font-size: 12px;
+  font-size: calc(12px * var(--dev-fs));
   font-weight: 700;
   flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
@@ -62,7 +62,7 @@ defineEmits<{ select: [] }>()
 .dev-step-check {
   color: #238636;
   font-weight: 700;
-  font-size: 16px;
+  font-size: calc(16px * var(--dev-fs));
   flex-shrink: 0;
 }
 </style>

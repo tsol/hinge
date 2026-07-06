@@ -12,7 +12,7 @@ export function resetServerState(): void { _hingeServerStarted = false }
 
 // ── Agent script templates ─────────────────────────────────
 const SCRIPT_NEW_SESSION = `#!/bin/bash
-# new-session.sh — Create a new Hermes session
+# new-session.sh — Create a new agent session
 # Hinge auto-generated — edit as needed
 set -e
 ALIAS="$1"
@@ -25,23 +25,7 @@ if [ ! -x "$HERMES_BIN" ]; then
 fi
 if [ -z "$HERMES_BIN" ] || [ ! -x "$HERMES_BIN" ]; then
   cat <<'HELP'
-┌────────────────────────────────────────────────────────────┐
-│  Hinge — Hermes Agent not found                           │
-│                                                            │
-│  To use Hermes as the AI agent backend, you need to:       │
-│                                                            │
-│  1. Install Hermes:                                        │
-│     pip install hermes-agent                               │
-│     or follow: https://hermes-agent.nousresearch.com/docs  │
-│                                                            │
-│  2. Make sure \`hermes\` is in your PATH, or update the      │
-│     HERMES_BIN path in .hinge/new-session.sh               │
-│                                                            │
-│  3. Verify with: hermes --version                          │
-│                                                            │
-│  See https://github.com/nousresearch/hermes-agent          │
-│  for installation guides and configuration.                │
-└────────────────────────────────────────────────────────────┘
+Agent not found. Hinge cannot run tasks until a coding agent is configured. Edit .hinge/new-session.sh: set HERMES_BIN to your agent CLI executable, or install the agent and make sure it is available in PATH. The script is generated once — replace the default command with whatever backend you use.
 HELP
   exit 1
 fi
@@ -64,7 +48,7 @@ fi
 echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$" || true`
 
 const SCRIPT_CONTINUE_SESSION = `#!/bin/bash
-# continue-session.sh — Continue an existing Hermes session, or create new if not found
+# continue-session.sh — Continue an existing agent session, or create new if not found
 # Hinge auto-generated — edit as needed
 set -e
 ALIAS="$1"
@@ -77,23 +61,7 @@ if [ ! -x "$HERMES_BIN" ]; then
 fi
 if [ -z "$HERMES_BIN" ] || [ ! -x "$HERMES_BIN" ]; then
   cat <<'HELP'
-┌────────────────────────────────────────────────────────────┐
-│  Hinge — Hermes Agent not found                           │
-│                                                            │
-│  To use Hermes as the AI agent backend, you need to:       │
-│                                                            │
-│  1. Install Hermes:                                        │
-│     pip install hermes-agent                               │
-│     or follow: https://hermes-agent.nousresearch.com/docs  │
-│                                                            │
-│  2. Make sure \`hermes\` is in your PATH, or update the      │
-│     HERMES_BIN path in .hinge/continue-session.sh          │
-│                                                            │
-│  3. Verify with: hermes --version                          │
-│                                                            │
-│  See https://github.com/nousresearch/hermes-agent          │
-│  for installation guides and configuration.                │
-└────────────────────────────────────────────────────────────┘
+Agent not found. Hinge cannot run tasks until a coding agent is configured. Edit .hinge/continue-session.sh: set HERMES_BIN to your agent CLI executable, or install the agent and make sure it is available in PATH. The script is generated once — replace the default command with whatever backend you use.
 HELP
   exit 1
 fi
@@ -133,38 +101,13 @@ set -e
 AUDIO_FILE="$1"
 if ! command -v python3 &>/dev/null; then
   cat <<'HELP'
-┌────────────────────────────────────────────────────────────┐
-│  Hinge — Python 3 not found                               │
-│                                                            │
-│  To use voice transcription, you need:                     │
-│                                                            │
-│  1. Install Python 3:                                      │
-│     https://www.python.org/downloads/                      │
-│                                                            │
-│  2. Install faster-whisper:                                │
-│     pip install faster-whisper                             │
-│                                                            │
-│  See https://github.com/SYSTRAN/faster-whisper             │
-│  for details.                                              │
-└────────────────────────────────────────────────────────────┘
+Python 3 is required for voice transcription. Install Python 3, or edit .hinge/whisper.sh to point at a different interpreter or transcription command. The script is generated once — customize it for your setup.
 HELP
   exit 1
 fi
 if ! python3 -c "import faster_whisper" 2>/dev/null; then
   cat <<'HELP'
-┌────────────────────────────────────────────────────────────┐
-│  Hinge — faster-whisper not installed                     │
-│                                                            │
-│  To use voice transcription, install:                      │
-│                                                            │
-│    pip install faster-whisper                              │
-│                                                            │
-│  It may also need:                                         │
-│    pip install ctranslate2                                 │
-│                                                            │
-│  See https://github.com/SYSTRAN/faster-whisper             │
-│  for details.                                              │
-└────────────────────────────────────────────────────────────┘
+Voice transcription dependency is missing (faster-whisper). Install it with pip install faster-whisper, or edit .hinge/whisper.sh to use a different transcription backend. The script is generated once — customize it for your setup.
 HELP
   exit 1
 fi

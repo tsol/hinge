@@ -19,6 +19,17 @@ import { resolve, relative, sep } from 'node:path'
 import { API_BASE } from './const'
 import { spawn } from 'node:child_process'
 import { resolveAgentScripts, readPrompt } from './utils/config'
+import {
+  getProjectRoot,
+  getHingeRoot,
+  resolveInside,
+  resolveInsideExisting,
+  resolveWriteTarget,
+  resolveQueueFolder,
+  resolveQueueFolderExisting,
+  isValidQueueStatus,
+  safeBasename,
+} from './utils/pathSafety'
 
 // ── Shared state ──────────────────────────────────────────
 const runningTasks = new Set<string>()
@@ -110,8 +121,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   if (pathname === `${API_BASE}/raw-file`) {
     const filePath = url.searchParams.get('path')
     if (!filePath) { status(res, 400, 'missing path'); return }
-    const abs = resolve(process.cwd(), filePath)
-    if (!existsSync(abs)) { status(res, 404, 'not found'); return }
+    const abs = resolveInsideExisting(getProjectRoot(), filePath)
+    if (!abs) { status(res, 404, 'not found'); return }
     if (!statSync(abs).isFile()) { status(res, 400, 'not a file'); return }
     const ext = filePath.split('.').pop()?.toLowerCase()
     const mimeMap: Record<string, string> = {
@@ -127,6 +138,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   if (pathname === `${API_BASE}/find-file`) {
     const name = url.searchParams.get('name')
     if (!name) { json(res, { error: 'missing name' }, 400); return }
+    if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+      json(res, { path: null }); return
+    }
     json(res, { path: findFile(name) })
     return
   }
@@ -140,9 +154,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       if (!filePath || content === undefined || content === null) {
         json(res, { error: 'missing path or content' }, 400); return
       }
-      const abs = resolve(process.cwd(), filePath)
-      mkdirSync(resolve(abs, '..'), { recursive: true })
-      writeFileSync(abs, content, 'utf-8')
+      const target = resolveWriteTarget(getProjectRoot(), filePath)
+      if (!target) { json(res, { error: 'path outside project' }, 403); return }
+      mkdirSync(target.parent, { recursive: true })
+      writeFileSync(target.file, content, 'utf-8')
       json(res, { ok: true })
     } catch { json(res, { error: 'invalid request' }, 400) }
     return
@@ -152,11 +167,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   if (pathname === `${API_BASE}/transcribe`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     const buf = await readBuffer(req)
-    const tmpPath = resolve(process.cwd(), `.hinge/_recording_${Date.now()}.webm`)
+    const tmpPath = resolveInside(getHingeRoot(), `_recording_${Date.now()}.webm`)
+    if (!tmpPath) { json(res, { error: 'invalid path' }, 500); return }
     try {
       writeFileSync(tmpPath, buf)
-      const whisperScript = resolve(process.cwd(), '.hinge/whisper.sh')
-      if (!existsSync(whisperScript)) {
+      const whisperScript = resolveInsideExisting(getHingeRoot(), 'whisper.sh')
+      if (!whisperScript) {
         throw new Error('whisper.sh not found — create .hinge/whisper.sh')
       }
       const result = await new Promise<string>((resolvePromise, reject) => {
@@ -196,7 +212,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     }
     if (method === 'POST') {
       if (!folder) { json(res, { error: 'missing folder' }, 400); return }
-      const attachDir = resolve(process.cwd(), '.hinge', folder, 'attach')
+      const attachDir = resolveQueueFolder(folder, 'attach')
+      if (!attachDir) { json(res, { error: 'invalid folder' }, 400); return }
       mkdirSync(attachDir, { recursive: true })
       const chunks: Buffer[] = []
       req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -219,7 +236,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
             const trimmed = data.slice(0, data.length - 2)
             const match = headers.match(/name="([^"]+)"(?:; filename="([^"]+)")?/)
             if (match && match[2]) {
-              writeFileSync(resolve(attachDir, match[2]), trimmed)
+              const safeName = safeBasename(match[2])
+              if (!safeName) continue
+              const dest = resolveInside(attachDir, safeName)
+              if (!dest) continue
+              writeFileSync(dest, trimmed)
             }
           }
           json(res, { ok: true })
@@ -236,8 +257,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     const folder = url.searchParams.get('folder')
     const file = url.searchParams.get('file')
     if (!folder || !file) { status(res, 400, 'missing folder or file'); return }
-    const abs = resolve(process.cwd(), '.hinge', folder, 'attach', file)
-    if (!existsSync(abs)) { status(res, 404, 'not found'); return }
+    const safeFile = safeBasename(file)
+    if (!safeFile) { status(res, 400, 'invalid file'); return }
+    const abs = resolveQueueFolderExisting(folder, 'attach', safeFile)
+    if (!abs) { status(res, 404, 'not found'); return }
     const ext = file.split('.').pop()?.toLowerCase()
     const mimeMap: Record<string, string> = {
       png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
@@ -254,8 +277,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
     const file = url.searchParams.get('file')
     if (!file) { status(res, 400, 'missing file'); return }
-    const chatPath = resolve(process.cwd(), '.hinge', file, 'chat.md')
-    if (!existsSync(chatPath)) { status(res, 404, ''); return }
+    const chatPath = resolveQueueFolderExisting(file, 'chat.md')
+    if (!chatPath) { status(res, 404, ''); return }
     text(res, readFileSync(chatPath, 'utf-8'))
     return
   }
@@ -265,8 +288,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
     const file = url.searchParams.get('file')
     if (!file) { status(res, 400, 'missing file'); return }
-    const logPath = resolve(process.cwd(), '.hinge', file, 'chat.log')
-    if (!existsSync(logPath)) { status(res, 404, ''); return }
+    const logPath = resolveQueueFolderExisting(file, 'chat.log')
+    if (!logPath) { status(res, 404, ''); return }
     text(res, readFileSync(logPath, 'utf-8'))
     return
   }
@@ -313,6 +336,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       try {
         const { file, status } = JSON.parse(body.toString())
         if (!file) { json(res, { error: 'missing file' }, 400); return }
+        if (status && !isValidQueueStatus(status)) {
+          json(res, { error: 'invalid status' }, 400); return
+        }
         const ok = status ? setQueueItemStatus(file, status) : toggleQueueItem(file)
         if (ok && status !== 'wait') processNextTask()
         json(res, { ok })
@@ -333,24 +359,28 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       if (!name || !message) {
         json(res, { error: 'missing name or message' }, 400); return
       }
-      const queueDir = resolve(process.cwd(), '.hinge')
+      if (name.includes('/') || name.includes('\\')) {
+        json(res, { error: 'invalid name' }, 400); return
+      }
       const stem = name.replace(/_(new|wait|done|processing)$/, '')
       const candidates = [`${stem}_wait`, `${stem}_done`, `${stem}_processing`, `${stem}_new`, stem]
       let folderPath: string | null = null
       let foundName = ''
       for (const c of candidates) {
-        const p = resolve(queueDir, c)
-        if (existsSync(p)) { folderPath = p; foundName = c; break }
+        const p = resolveQueueFolder(c)
+        if (p && existsSync(p)) { folderPath = p; foundName = c; break }
       }
       if (!folderPath) {
-        const exact = resolve(queueDir, name)
-        if (existsSync(exact)) { folderPath = exact; foundName = name }
+        const exact = resolveQueueFolder(name)
+        if (exact && existsSync(exact)) { folderPath = exact; foundName = name }
         else { json(res, { error: 'task not found' }, 404); return }
       }
       appendUserMessage(foundName, message)
       const processingName = `${stem}_processing`
       if (foundName !== processingName) {
-        renameSync(folderPath, resolve(queueDir, processingName))
+        const dest = resolveQueueFolder(processingName)
+        if (!dest) { json(res, { error: 'invalid name' }, 400); return }
+        renameSync(folderPath, dest)
       }
       if (!runningTasks.has(processingName)) {
         enqueueTask(processingName)
@@ -376,23 +406,27 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     try {
       const { name } = JSON.parse(body.toString())
       if (!name) { json(res, { error: 'missing name' }, 400); return }
+      if (name.includes('/') || name.includes('\\')) {
+        json(res, { error: 'invalid name' }, 400); return
+      }
       const stemName = name.replace(/_(new|wait|done|processing)$/, '')
-      const queueDir = resolve(process.cwd(), '.hinge')
+      const queueDir = getHingeRoot()
 
       // Determine the actual current status by checking which folder exists
       const candidates = [`${stemName}_processing`, `${stemName}_wait`, `${stemName}_new`, `${stemName}_done`, stemName]
       let foundName: string | null = null
       for (const c of candidates) {
-        const p = resolve(queueDir, c)
-        if (existsSync(p)) { foundName = c; break }
+        const p = resolveQueueFolder(c)
+        if (p && existsSync(p)) { foundName = c; break }
       }
 
       const logLine = `[cancel] name="${name}" stem="${stemName}" found="${foundName||'none'}"`
-      try { appendFileSync(resolve(queueDir, '.cancel.log'), `${new Date().toISOString()} ${logLine}\n`) } catch {}
+      try { appendFileSync(resolveInside(queueDir, '.cancel.log')!, `${new Date().toISOString()} ${logLine}\n`) } catch {}
 
       if (!foundName) { json(res, { ok: true }); return }
 
-      const folderPath = resolve(queueDir, foundName)
+      const folderPath = resolveQueueFolder(foundName)
+      if (!folderPath) { json(res, { error: 'invalid name' }, 400); return }
 
       if (foundName.endsWith('_processing')) {
         // Kill running process
@@ -409,15 +443,17 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         }
         // Rename processing → new (allow retry)
         const newName = `${stemName}_new`
-        try { renameSync(folderPath, resolve(queueDir, newName)) } catch { /* ignore */ }
+        const dest = resolveQueueFolder(newName)
+        if (dest) try { renameSync(folderPath, dest) } catch { /* ignore */ }
         // Free up a slot — start next task
         processNextTask()
-        try { appendFileSync(resolve(queueDir, '.cancel.log'), `  → _processing → _new, processNextTask()\n`) } catch {}
+        try { appendFileSync(resolveInside(queueDir, '.cancel.log')!, `  → _processing → _new, processNextTask()\n`) } catch {}
       } else {
         // _wait or _new → user cancelled, archive to _done
         const doneName = `${stemName}_done`
-        try { renameSync(folderPath, resolve(queueDir, doneName)) } catch { /* ignore */ }
-        try { appendFileSync(resolve(queueDir, '.cancel.log'), `  → _wait/_new → _done, NO processNextTask\n`) } catch {}
+        const dest = resolveQueueFolder(doneName)
+        if (dest) try { renameSync(folderPath, dest) } catch { /* ignore */ }
+        try { appendFileSync(resolveInside(queueDir, '.cancel.log')!, `  → _wait/_new → _done, NO processNextTask\n`) } catch {}
         // Don't call processNextTask — nothing was running, don't start the task user just cancelled
       }
       json(res, { ok: true })
@@ -437,16 +473,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       const body = await readBuffer(req)
       try {
         const { content } = JSON.parse(body.toString())
-        const hingeDir = resolve(process.cwd(), '.hinge')
+        const hingeDir = getHingeRoot()
         if (!existsSync(hingeDir)) mkdirSync(hingeDir, { recursive: true })
-        writeFileSync(resolve(hingeDir, 'prompt.md'), content, 'utf-8')
+        const promptPath = resolveInside(hingeDir, 'prompt.md')
+        if (!promptPath) { json(res, { error: 'invalid path' }, 500); return }
+        writeFileSync(promptPath, content, 'utf-8')
         json(res, { ok: true })
       } catch { json(res, { error: 'invalid payload' }, 400) }
       return
     }
     if (method === 'DELETE') {
-      const overridePath = resolve(process.cwd(), '.hinge', 'prompt.md')
-      if (existsSync(overridePath)) unlinkSync(overridePath)
+      const overridePath = resolveInsideExisting(getHingeRoot(), 'prompt.md')
+      if (overridePath) unlinkSync(overridePath)
       json(res, { ok: true })
       return
     }
@@ -457,7 +495,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   // ── Execute ──
   if (pathname === `${API_BASE}/execute`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
-    const queueDir = resolve(process.cwd(), '.hinge')
+    const queueDir = getHingeRoot()
     if (!existsSync(queueDir)) { json(res, { ok: true, spawned: 0 }); return }
     const entries = readdirSync(queueDir, { withFileTypes: true })
     let spawned = 0
@@ -512,18 +550,20 @@ interface FileEntry {
 }
 
 function listDir(dirPath: string): FileEntry[] {
-  const abs = resolve(process.cwd(), dirPath)
-  if (!existsSync(abs)) return []
+  const abs = resolveInsideExisting(getProjectRoot(), dirPath)
+  if (!abs) return []
   const entries = readdirSync(abs, { withFileTypes: true })
+  const projectRoot = getProjectRoot()
   const result: FileEntry[] = []
   for (const e of entries) {
     if (e.name.startsWith('.') && e.name !== '.hinge') continue
     if (e.name === 'node_modules') continue
-    const fullPath = resolve(abs, e.name)
+    const fullPath = resolveInside(abs, e.name)
+    if (!fullPath) continue
     try {
       result.push({
         name: e.name,
-        path: relative(process.cwd(), fullPath).split(sep).join('/'),
+        path: relative(projectRoot, fullPath).split(sep).join('/'),
         isDir: e.isDirectory(),
         isSymlink: e.isSymbolicLink(),
       })
@@ -537,24 +577,29 @@ function listDir(dirPath: string): FileEntry[] {
 }
 
 function findFile(filename: string, scanDir = '.'): string | null {
-  const abs = resolve(process.cwd(), scanDir)
-  if (!existsSync(abs)) return null
+  const projectRoot = getProjectRoot()
+  const relDir = scanDir.startsWith(projectRoot)
+    ? relative(projectRoot, scanDir) || '.'
+    : scanDir
+  const abs = resolveInsideExisting(projectRoot, relDir)
+  if (!abs) return null
   let entries: string[]
   try { entries = readdirSync(abs) } catch { return null }
   for (const e of entries) {
     if (e === 'node_modules') continue
     if (e.startsWith('.') && e !== '.hinge') continue
-    const full = resolve(abs, e)
+    const full = resolveInside(abs, e)
+    if (!full) continue
     try {
       const st = statSync(full)
       if (st.isDirectory()) {
-        const relDepth = relative(process.cwd(), full).split(sep).filter(Boolean).length
+        const relDepth = relative(projectRoot, full).split(sep).filter(Boolean).length
         if (relDepth < 6) {
           const found = findFile(filename, full)
           if (found) return found
         }
       } else if (e.toLowerCase() === filename.toLowerCase()) {
-        return relative(process.cwd(), full).split(sep).join('/')
+        return relative(projectRoot, full).split(sep).join('/')
       }
     } catch { /* skip */ }
   }
@@ -562,14 +607,14 @@ function findFile(filename: string, scanDir = '.'): string | null {
 }
 
 function readFilePath(filePath: string): string | null {
-  const abs = resolve(process.cwd(), filePath)
-  if (!existsSync(abs)) return null
+  const abs = resolveInsideExisting(getProjectRoot(), filePath)
+  if (!abs) return null
   try { return readFileSync(abs, 'utf-8') } catch { return null }
 }
 
 // ── Recovery: handle orphaned _processing tasks after server restart ──
 function recoverOrphanedTasks() {
-  const queueDir = resolve(process.cwd(), '.hinge')
+  const queueDir = getHingeRoot()
   if (!existsSync(queueDir)) return
   let entries
   try { entries = readdirSync(queueDir, { withFileTypes: true }) as Dirent[] } catch { return }
@@ -578,11 +623,12 @@ function recoverOrphanedTasks() {
   if (orphans.length > 0) {
     console.log(`[hinge] Found ${orphans.length} orphaned _processing tasks — recovering...`)
   for (const e of orphans) {
-    const folderPath = resolve(queueDir, e.name)
-    const pidPath = resolve(folderPath, '.pid')
+    const folderPath = resolveQueueFolder(e.name)
+    if (!folderPath) continue
+    const pidPath = resolveInside(folderPath, '.pid')
     let pidDead = false
 
-    if (existsSync(pidPath)) {
+    if (pidPath && existsSync(pidPath)) {
       try {
         const raw = readFileSync(pidPath, 'utf-8').trim()
         const pid = parseInt(raw, 10)
@@ -598,13 +644,14 @@ function recoverOrphanedTasks() {
 
     if (pidDead) {
       // Agent process is gone — move to _done so next task can start
-      try {
-        unlinkSync(pidPath)
-      } catch { /* ignore */ }
+      if (pidPath) try { unlinkSync(pidPath) } catch { /* ignore */ }
       const doneName = e.name.replace('_processing', '_done')
+      const doneDest = resolveQueueFolder(doneName)
       try {
-        renameSync(folderPath, resolve(queueDir, doneName))
-        console.log(`[hinge] Recovered orphan: ${e.name} → ${doneName}`)
+        if (doneDest) {
+          renameSync(folderPath, doneDest)
+          console.log(`[hinge] Recovered orphan: ${e.name} → ${doneName}`)
+        }
       } catch (err) {
         console.error(`[hinge] Failed to recover ${e.name}:`, err)
       }
@@ -630,18 +677,21 @@ interface QueueItem {
 }
 
 function appendToQueue(content: string) {
-  const queueDir = resolve(process.cwd(), '.hinge')
+  const queueDir = getHingeRoot()
   if (!existsSync(queueDir)) mkdirSync(queueDir, { recursive: true })
   const ts = new Date().toISOString().replace(/:/g, '-').replace('.', '_')
   const folderName = `${ts}_new`
-  const folderPath = resolve(queueDir, folderName)
+  const folderPath = resolveQueueFolder(folderName)
+  if (!folderPath) return
   mkdirSync(folderPath, { recursive: true })
-  writeFileSync(resolve(folderPath, 'chat.md'), content || '', 'utf-8')
+  const chatPath = resolveInside(folderPath, 'chat.md')
+  if (!chatPath) return
+  writeFileSync(chatPath, content || '', 'utf-8')
 }
 
 function appendUserMessage(folderName: string, message: string) {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const chatPath = resolve(queueDir, folderName, 'chat.md')
+  const chatPath = resolveQueueFolder(folderName, 'chat.md')
+  if (!chatPath) return
   if (!existsSync(chatPath)) {
     writeFileSync(chatPath, message, 'utf-8'); return
   }
@@ -649,7 +699,7 @@ function appendUserMessage(folderName: string, message: string) {
 }
 
 function listQueue(): QueueItem[] {
-  const queueDir = resolve(process.cwd(), '.hinge')
+  const queueDir = getHingeRoot()
   if (!existsSync(queueDir)) return []
   // Auto-recover orphaned _processing tasks on every list
   recoverOrphanedTasks()
@@ -661,8 +711,8 @@ function listQueue(): QueueItem[] {
     if (name.startsWith('.')) continue
     if (!name.includes('_new') && !name.includes('_wait') && !name.includes('_done') && !name.includes('_processing')) continue
     const status = name.endsWith('_done') ? 'done' : name.endsWith('_processing') ? 'processing' as any : name.endsWith('_wait') ? 'wait' : 'new'
-    const mdPath = resolve(queueDir, name, 'chat.md')
-    if (!existsSync(mdPath)) continue
+    const mdPath = resolveQueueFolder(name, 'chat.md')
+    if (!mdPath || !existsSync(mdPath)) continue
     const content = readFileSync(mdPath, 'utf-8')
     const component = content.match(/^### Component: (.+)/m)?.[1] ?? ''
     const url = content.match(/^### Page: (.+)/m)?.[1] ?? ''
@@ -689,16 +739,16 @@ function listQueue(): QueueItem[] {
       return textLines.filter(l => l.trim()).join('\n').trim()
     })()
     // Detect failed tasks
-    const errorPath = resolve(queueDir, name, '.error')
-    const failed = existsSync(errorPath)
+    const errorPath = resolveQueueFolder(name, '.error')
+    const failed = errorPath ? existsSync(errorPath) : false
     const displayStatus: QueueItem['status'] = failed ? 'error' : status
     // Agent status for processing tasks
     let agentStatus: { status: string; pid?: number; elapsed?: number } | null = null
     if (status === 'processing') {
       // Calculate elapsed seconds from .pid file mtime (process start time), not folder creation time
       let elapsed: number | undefined
-      const pidPath = resolve(queueDir, name, '.pid')
-      if (existsSync(pidPath)) {
+      const pidPath = resolveQueueFolder(name, '.pid')
+      if (pidPath && existsSync(pidPath)) {
         // Use .pid mtime as the authoritative process start time
         const pidStat = statSync(pidPath)
         elapsed = Math.floor((Date.now() - pidStat.mtimeMs) / 1000)
@@ -730,41 +780,41 @@ function listQueue(): QueueItem[] {
 }
 
 function toggleQueueItem(filename: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const abs = resolve(queueDir, filename)
-  if (!existsSync(abs)) return false
+  const abs = resolveQueueFolderExisting(filename)
+  if (!abs) return false
   const stem = filename.replace(/_(new|wait|done|processing)$/, '')
   let suffix: string
   if (filename.endsWith('_new')) suffix = '_wait'
   else if (filename.endsWith('_wait')) suffix = '_done'
   else if (filename.endsWith('_processing')) suffix = '_done'
   else suffix = '_new'
-  renameSync(abs, resolve(queueDir, `${stem}${suffix}`))
+  const dest = resolveQueueFolder(`${stem}${suffix}`)
+  if (!dest) return false
+  renameSync(abs, dest)
   return true
 }
 
 function setQueueItemStatus(name: string, status: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const folderPath = resolve(queueDir, name)
-  if (!existsSync(folderPath)) return false
+  const folderPath = resolveQueueFolderExisting(name)
+  if (!folderPath) return false
   const stem = name.replace(/_(new|wait|done|processing)$/, '')
   const newName = `${stem}_${status}`
   if (newName === name) return true
-  renameSync(folderPath, resolve(queueDir, newName))
+  const dest = resolveQueueFolder(newName)
+  if (!dest) return false
+  renameSync(folderPath, dest)
   return true
 }
 
 function deleteQueueItem(filename: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const abs = resolve(queueDir, filename)
-  if (!existsSync(abs)) return false
+  const abs = resolveQueueFolderExisting(filename)
+  if (!abs) return false
   try { rmSync(abs, { recursive: true, force: true }); return true } catch { return false }
 }
 
 function updateQueueItemNote(filename: string, newNote: string): boolean {
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const mdPath = resolve(queueDir, filename, 'chat.md')
-  if (!existsSync(mdPath)) return false
+  const mdPath = resolveQueueFolderExisting(filename, 'chat.md')
+  if (!mdPath) return false
   writeFileSync(mdPath, newNote, 'utf-8')
   return true
 }
@@ -772,8 +822,8 @@ function updateQueueItemNote(filename: string, newNote: string): boolean {
 // ── Attachment helpers ────────────────────────────────────
 
 function listAttachments(folderName: string): { name: string; size: number }[] {
-  const attachDir = resolve(process.cwd(), '.hinge', folderName, 'attach')
-  if (!existsSync(attachDir)) return []
+  const attachDir = resolveQueueFolderExisting(folderName, 'attach')
+  if (!attachDir) return []
   const entries = readdirSync(attachDir, { withFileTypes: true })
   const files: { name: string; size: number }[] = []
   for (const e of entries) {
@@ -788,8 +838,10 @@ function listAttachments(folderName: string): { name: string; size: number }[] {
 }
 
 function deleteAttachment(folderName: string, fileName: string): boolean {
-  const filePath = resolve(process.cwd(), '.hinge', folderName, 'attach', fileName)
-  if (!existsSync(filePath)) return false
+  const safeFile = safeBasename(fileName)
+  if (!safeFile) return false
+  const filePath = resolveQueueFolderExisting(folderName, 'attach', safeFile)
+  if (!filePath) return false
   unlinkSync(filePath)
   return true
 }
@@ -820,12 +872,17 @@ function extractLastUserMessage(content: string): string {
 
 function runTaskChunk(folderName: string) {
   runningTasks.add(folderName)
-  const queueDir = resolve(process.cwd(), '.hinge')
-  const folderPath = resolve(queueDir, folderName)
-  const chatPath = resolve(folderPath, 'chat.md')
-  if (!existsSync(chatPath)) {
+  const folderPath = resolveQueueFolder(folderName)
+  if (!folderPath) {
     runningTasks.delete(folderName)
-    try { renameSync(folderPath, resolve(queueDir, folderName.replace('_processing', '_done'))) } catch { /* ignore */ }
+    processNextTask()
+    return
+  }
+  const chatPath = resolveInside(folderPath, 'chat.md')
+  if (!chatPath || !existsSync(chatPath)) {
+    runningTasks.delete(folderName)
+    const doneDest = resolveQueueFolder(folderName.replace('_processing', '_done'))
+    if (doneDest) try { renameSync(folderPath, doneDest) } catch { /* ignore */ }
     processNextTask()
     return
   }
@@ -916,8 +973,11 @@ function runTaskChunk(folderName: string) {
       // Rename _processing → _done, THEN pick next task (avoids race)
       try {
         const doneName = folderName.replace('_processing', '_done')
-        renameSync(folderPath, resolve(queueDir, doneName))
-        console.log(`[hinge] Task ${folderName} → ${doneName}`)
+        const doneDest = resolveQueueFolder(doneName)
+        if (doneDest) {
+          renameSync(folderPath, doneDest)
+          console.log(`[hinge] Task ${folderName} → ${doneName}`)
+        }
       } catch (e: any) {
         console.error(`[hinge] Failed to rename ${folderName} to _done:`, e)
       }
@@ -931,8 +991,11 @@ function runTaskChunk(folderName: string) {
       try { unlinkSync(resolve(folderPath, '.pid')) } catch {}
       try {
         const doneName = folderName.replace('_processing', '_done')
-        renameSync(folderPath, resolve(queueDir, doneName))
-        console.log(`[hinge] Error recovery: ${folderName} → ${doneName}`)
+        const doneDest = resolveQueueFolder(doneName)
+        if (doneDest) {
+          renameSync(folderPath, doneDest)
+          console.log(`[hinge] Error recovery: ${folderName} → ${doneName}`)
+        }
       } catch (e: any) {
         console.error(`[hinge] Failed to rename on error for ${folderName}:`, e)
       }
@@ -954,10 +1017,10 @@ function enqueueTask(folderName: string) {
 
 function processNextTask() {
   // Clean stale runningTasks entries — folders no longer on disk (child completed and renamed)
-  const queueDir = resolve(process.cwd(), '.hinge')
+  const queueDir = getHingeRoot()
   for (const task of runningTasks) {
-    const folderPath = resolve(queueDir, task)
-    if (!existsSync(folderPath)) {
+    const folderPath = resolveQueueFolder(task)
+    if (!folderPath || !existsSync(folderPath)) {
       runningTasks.delete(task)
       console.log(`[hinge] Cleaned stale runningTasks: ${task} (folder gone)`)
     }
@@ -980,8 +1043,11 @@ function processNextTask() {
 
   const waitName = waitFolders[0].name
   const processingName = waitName.replace('_wait', '_processing')
+  const waitPath = resolveQueueFolder(waitName)
+  const processingPath = resolveQueueFolder(processingName)
+  if (!waitPath || !processingPath) return
   try {
-    renameSync(resolve(queueDir, waitName), resolve(queueDir, processingName))
+    renameSync(waitPath, processingPath)
   } catch (e: any) {
     console.error(`[hinge] Failed to promote ${waitName} to _processing:`, e)
     return

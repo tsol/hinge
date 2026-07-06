@@ -1,5 +1,5 @@
 import { API_BASE } from '../const'
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { usePersistedState } from './usePersistedState'
 
 export interface FileEntry {

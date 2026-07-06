@@ -1,5 +1,5 @@
 import { API_BASE } from '../const'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 export function useFileSource() {
   const content = ref('')

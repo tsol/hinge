@@ -1,5 +1,5 @@
 import { API_BASE } from '../const'
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
 
 export interface Selection {
   component: string

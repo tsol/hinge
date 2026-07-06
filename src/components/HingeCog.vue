@@ -8,6 +8,7 @@ import {
   setHighlightEntry,
 } from '../composables/useElementHighlights'
 import { useCogModalPosition } from '../composables/useCogModalPosition'
+import { usePersistedState } from '../composables/usePersistedState'
 import HingeMic from './HingeMic.vue'
 
 const props = defineProps<{
@@ -37,7 +38,10 @@ const { modalOpen, modalStyle, toggleModal, closeModal } = useCogModalPosition(
 )
 
 // ── Task text ──
-const taskText = ref('')
+const { state: cogText } = usePersistedState('cogText', {
+  text: '',
+})
+const taskText = toRef(cogText, 'text')
 const circularIdx = ref(0)
 
 // ── Circular selector ──

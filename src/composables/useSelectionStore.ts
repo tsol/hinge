@@ -1,5 +1,6 @@
 import { API_BASE } from '../const'
-import { ref, reactive } from 'vue'
+import { reactive } from 'vue'
+import { getComponentFileExtensions, stripComponentExtension } from '../utils/componentTarget'
 
 export interface Selection {
   component: string
@@ -24,10 +25,13 @@ export function useSelectionStore() {
   async function resolveFilePath(comp: string): Promise<string | null> {
     if (!comp || !/^[A-Z]/.test(comp)) return null
     try {
-      const res = await fetch(`${API_BASE}/find-file?name=${encodeURIComponent(comp + '.vue')}`)
-      if (!res.ok) return null
-      const data = await res.json()
-      return data.path || null
+      for (const ext of getComponentFileExtensions()) {
+        const res = await fetch(`${API_BASE}/find-file?name=${encodeURIComponent(comp + ext)}`)
+        if (!res.ok) continue
+        const data = await res.json()
+        if (data.path) return data.path
+      }
+      return null
     } catch {
       return null
     }
@@ -56,9 +60,9 @@ export function useSelectionStore() {
   function fromFile(filePath: string) {
     state.filePath = filePath
     state.source = 'file'
-    // Extract component name from path: "src/components/Foo.vue" → "Foo"
+    // Extract component name from path: "src/components/Foo.tsx" → "Foo"
     const basename = filePath.split('/').pop() || ''
-    const comp = basename.replace(/\.vue$/i, '')
+    const comp = stripComponentExtension(basename)
     state.component = comp
     // Clear DOM info — we selected a file, not a DOM element
     state.dom = ''

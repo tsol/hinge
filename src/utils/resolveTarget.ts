@@ -7,7 +7,7 @@ import {
   getRouteComponentName,
   pickBestDomElement,
 } from './domTarget'
-import { formatPropsInline, resolveVueFromElement } from './vueTarget'
+import { formatPropsInline, resolveComponentFromElement } from './componentTarget'
 
 export function formatTargetSummary(
   target: HingeTarget,
@@ -31,12 +31,12 @@ export function resolveTargetFromElement(el: Element | null): HingeTarget {
   }
 
   const dom = describeElement(el)
-  const vue = resolveVueFromElement(el)
+  const resolved = resolveComponentFromElement(el)
 
   return {
-    component: vue.component ?? dom,
+    component: resolved.component ?? dom,
     dom,
-    props: vue.props,
+    props: resolved.props,
   }
 }
 

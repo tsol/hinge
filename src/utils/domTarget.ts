@@ -189,6 +189,15 @@ export function getRouteComponentName(): string | null {
   if (routeName != null && routeName !== '') {
     return String(routeName)
   }
+  // Fallback to current URL path — works with most SPA routers out of the box
+  const hash = window.location.hash
+  if (hash && hash.length > 1) {
+    return hash.replace(/^#!?/, '') || null
+  }
+  const path = window.location.pathname
+  if (path && path !== '/') {
+    return path
+  }
   return null
 }
 

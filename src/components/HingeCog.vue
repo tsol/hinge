@@ -189,13 +189,13 @@ async function onAdd() {
     // Save page URL
     const url = window.location.pathname + window.location.search
     if (url) fields.Url = url
-    // Extract Vue props & computed styles
+    // Extract component props & computed styles
     if (el) {
-      const { resolveVueFromElement, formatPropsInline } = await import('../utils/vueTarget')
+      const { resolveComponentFromElement, formatPropsInline } = await import('../utils/componentTarget')
       const { generateCSSSelector } = await import('../utils/cssSelector')
-      const vue = resolveVueFromElement(el)
-      if (!vue.component?.startsWith('Hinge')) {
-        const propsStr = formatPropsInline(vue.props, 6)
+      const resolved = resolveComponentFromElement(el)
+      if (!resolved.component?.startsWith('Hinge')) {
+        const propsStr = formatPropsInline(resolved.props, 6)
         if (propsStr) fields.Props = propsStr
       }
       const cs = el instanceof HTMLElement ? getComputedStyle(el) : null

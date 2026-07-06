@@ -1,9 +1,9 @@
 export interface HingeTarget {
-  /** Best-effort Vue component name under the cog. */
+  /** Best-effort component name under the cog (Vue, React, …). */
   component: string
   /** DOM description of the topmost hit element. */
   dom: string
-  /** Resolved Vue props for the picked component (serializable values only). */
+  /** Resolved component props (serializable values only). */
   props: Record<string, unknown>
 }
 

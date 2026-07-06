@@ -57,6 +57,7 @@ const note = computed({
 
 const { state: panel } = usePersistedState('panel', {
   activeTab: 'input' as 'input' | 'files' | 'source',
+  lastFile: '',
 })
 const activeTab = computed({
   get: () => panel.activeTab as 'input' | 'files' | 'source',
@@ -480,6 +481,11 @@ watch([activeTab, () => selection.filePath], async ([tab, file]) => {
   if (tab !== 'source' || !file) return
   if (!fileSrc.loading.value && fileSrc.path.value === file) return // already loaded
   await fileSrc.loadFile(file)
+}, { immediate: true })
+
+// Save last selected file path for restoring after reload
+watch(() => selection.filePath, (fp) => {
+  if (fp) panel.lastFile = fp
 })
 
 // When selection.filePath changes (from gear) → expand tree to that file
@@ -514,6 +520,10 @@ watch(activeTab, (tab) => {
     treePollTimer.value = null
   }
   if (tab === 'files') {
+    // Load root on first visit after reload
+    if (fileTree.root.value.length === 0) {
+      fileTree.loadRoot()
+    }
     treePollTimer.value = setInterval(() => {
       fileTree.refreshProcessingFolders()
       // Also refresh root if expanded (new files may appear)
@@ -521,6 +531,16 @@ watch(activeTab, (tab) => {
         fileTree.refreshRoot()
       }
     }, 5000)
+  }
+}, { immediate: true })
+
+// Restore last selected file on mount
+onMounted(() => {
+  if (panel.lastFile && !selection.filePath) {
+    fromFile(panel.lastFile)
+    if (activeTab.value === 'files') {
+      fileTree.expandToPath(panel.lastFile)
+    }
   }
 })
 

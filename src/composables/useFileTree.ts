@@ -1,4 +1,5 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { usePersistedState } from './usePersistedState'
 
 export interface FileEntry {
   name: string
@@ -7,29 +8,24 @@ export interface FileEntry {
   isSymlink: boolean
 }
 
-const STORAGE_KEY = 'hinge_file_tree_expanded'
-
-function loadSavedExpanded(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
-  return new Set()
-}
-
 export function useFileTree() {
   const root = ref<FileEntry[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const expanded = ref<Set<string>>(loadSavedExpanded())
-  const children = ref<Map<string, FileEntry[]>>(new Map())
   const highlightedPath = ref('')
 
-  function saveExpanded() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([...expanded.value]))
-    } catch { /* ignore */ }
-  }
+  // Persisted expanded paths (array for JSON compatibility)
+  const { state: tree } = usePersistedState('fileTree', {
+    expanded: [] as string[],
+  })
+  const expanded = ref<Set<string>>(new Set(tree.expanded))
+
+  // Sync back to persisted state whenever expanded changes
+  watch(expanded, (s) => {
+    tree.expanded = [...s]
+  }, { deep: true })
+
+  const children = ref<Map<string, FileEntry[]>>(new Map())
 
   async function loadDir(dirPath: string): Promise<FileEntry[]> {
     const params = new URLSearchParams({ path: dirPath })
@@ -60,7 +56,6 @@ export function useFileTree() {
     if (expanded.value.has(path)) {
       expanded.value.delete(path)
       expanded.value = new Set(expanded.value) // trigger reactivity
-      saveExpanded()
       return
     }
     if (!children.value.has(path)) {
@@ -68,7 +63,6 @@ export function useFileTree() {
       children.value = new Map(children.value).set(path, entries)
     }
     expanded.value = new Set(expanded.value).add(path)
-    saveExpanded()
   }
 
   function getChildren(path: string): FileEntry[] {

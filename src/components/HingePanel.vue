@@ -486,8 +486,8 @@ async function saveSourceFile() {
 
 // When source file changes externally → exit edit mode and reset
 watch([activeTab, () => selection.filePath], async ([tab, file]) => {
-  // Exit edit mode if file changed
-  if (sourceEditMode.value) {
+  // Exit edit mode only if a different file was already loaded (not on initial restore)
+  if (sourceEditMode.value && fileSrc.path.value && fileSrc.path.value !== file) {
     sourceEditMode.value = false
   }
   if (tab !== 'source' || !file) return

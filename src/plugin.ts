@@ -60,7 +60,7 @@ if [ -n "$SESSION_ID" ]; then
     echo "$ALIAS=$SESSION_ID" >> "$DIR/.sessions_map.txt"
   fi
 fi
-echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$"`
+echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^$" || true`
 
 const SCRIPT_CONTINUE_SESSION = `#!/bin/bash
 # continue-session.sh — Continue an existing Hermes session, or create new if not found
@@ -123,7 +123,7 @@ else
     fi
   fi
 fi
-echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$"`
+echo "$OUTPUT" | grep -v "^session_id:" | grep -v "^↻ Resumed" | grep -v "^$" || true`
 
 const SCRIPT_WHISPER = `#!/bin/bash
 # whisper.sh — Transcribe audio file to text
@@ -180,7 +180,7 @@ for seg in segments:
 const SCRIPT_AGENT_WRAPPER = `#!/bin/bash
 # .agent-wrapper.sh — Hinge internal cleanup wrapper
 # AUTO-GENERATED — do not edit.
-set -e
+# NOTE: no 'set -e' — errors handled explicitly with || true
 ALIAS="$1"
 SCRIPT_TYPE="$2"
 DIR="$(dirname "$0")"
@@ -190,13 +190,13 @@ CHAT_MD="$FOLDER/chat.md"
 
 # Trap SIGTERM/SIGINT so a kill from Node timeout cleans up properly
 _cleanup() {
-  rm -f "$PID_FILE"
+  rm -f "$PID_FILE" 2>/dev/null || true
   mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
   exit 0
 }
 trap _cleanup TERM INT
 
-echo "$$" > "$PID_FILE"
+echo "$$" > "$PID_FILE" 2>/dev/null || true
 if [ "$SCRIPT_TYPE" = "continue" ]; then
     USER_SCRIPT="$DIR/continue-session.sh"
 else
@@ -208,7 +208,7 @@ if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT" ]; then
     printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "$OUTPUT" >> "$CHAT_MD"
 fi
 echo "$OUTPUT" || true
-rm -f "$PID_FILE"
+rm -f "$PID_FILE" 2>/dev/null || true
 mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
 exit $CODE`
 

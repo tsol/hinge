@@ -14,11 +14,22 @@ import {
   writeFileSync, appendFileSync, unlinkSync, renameSync,
   rmSync, statSync,
 } from 'node:fs'
-import type { Dirent } from 'node:fs'
 import { resolve, relative, sep } from 'node:path'
 import { API_BASE } from './const'
 import { spawn } from 'node:child_process'
-import { resolveAgentScripts, readPrompt } from './utils/config'
+import {
+  enqueueTask,
+  tryStartNextTask,
+  recoverAndSchedule,
+  syncRunningTasksFromDisk,
+  getAgentStatus,
+  isTaskRunning,
+  clearTaskFromQueue,
+  readWrapperPid,
+  getRunningTaskNames,
+  hasRunningTasks,
+} from './agentRunner'
+import { readPrompt } from './utils/config'
 import {
   getProjectRoot,
   getHingeRoot,
@@ -31,11 +42,7 @@ import {
   safeBasename,
 } from './utils/pathSafety'
 
-// ── Shared state ──────────────────────────────────────────
-const runningTasks = new Set<string>()
-const taskQueue: string[] = []
-
-// Store HTTP server reference globally so it survives Vite HMR module re-evaluation
+// ── Shared state → agentRunner.ts (persistent across HMR) ──
 // Key includes port so each project has its OWN server — projects don't share
 const GLOBAL_KEY_PREFIX = '__hinge_api_server_'
 
@@ -76,7 +83,7 @@ export function startHingeServer(port = 5177): http.Server {
   server.listen(port, () => {
     console.log(`[hinge-server] Listening on :${port}`)
     // Recover orphaned processing tasks after server restart/reload
-    recoverOrphanedTasks()
+    recoverAndSchedule()
   })
   setApiServer(port, server)
   return server
@@ -90,10 +97,16 @@ export function stopHingeServer(port = 5177): void {
   }
 }
 
-/** True while the server has been started (survives Vite HMR module re-eval) */
-let serverStarted = false
-export function isRunning(): boolean { return serverStarted }
-export function markRunning(): void { serverStarted = true }
+/** First port in range with a registered hinge API server (survives HMR). */
+export function findRegisteredApiPort(start = 5177, end = 5197): number | null {
+  for (let p = start; p <= end; p++) {
+    if (getApiServer(p)) return p
+  }
+  return null
+}
+
+/** Ping /status to see if a hinge API server is already listening. */
+export { probeHingeApi } from './probeApi'
 
 // ── Request router ────────────────────────────────────────
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
@@ -297,7 +310,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   // ── Queue run (trigger processing of queued tasks) ──
   if (pathname === `${API_BASE}/queue/run`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
-    processNextTask()
+    tryStartNextTask()
     json(res, { ok: true })
     return
   }
@@ -340,7 +353,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
           json(res, { error: 'invalid status' }, 400); return
         }
         const ok = status ? setQueueItemStatus(file, status) : toggleQueueItem(file)
-        if (ok && status !== 'wait') processNextTask()
+        if (ok && status !== 'wait') tryStartNextTask()
         json(res, { ok })
       } catch { json(res, { error: 'invalid request' }, 400) }
       return
@@ -382,7 +395,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         if (!dest) { json(res, { error: 'invalid name' }, 400); return }
         renameSync(folderPath, dest)
       }
-      if (!runningTasks.has(processingName)) {
+      if (!isTaskRunning(processingName)) {
         enqueueTask(processingName)
       }
       json(res, { ok: true, processingName })
@@ -395,7 +408,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   // ── Status ──
   if (pathname === `${API_BASE}/status`) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
-    json(res, { running: runningTasks.size > 0, processing: Array.from(runningTasks) })
+    json(res, {
+      running: hasRunningTasks(),
+      processing: getRunningTaskNames(),
+      projectRoot: getProjectRoot(),
+    })
     return
   }
 
@@ -429,25 +446,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       if (!folderPath) { json(res, { error: 'invalid name' }, 400); return }
 
       if (foundName.endsWith('_processing')) {
-        // Kill running process
-        const qIdx = taskQueue.indexOf(foundName)
-        if (qIdx !== -1) taskQueue.splice(qIdx, 1)
-        if (runningTasks.has(foundName)) {
-          runningTasks.delete(foundName)
-          const pidPath = resolve(folderPath, '.pid')
-          try {
-            const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
-            if (pid > 0) { try { process.kill(pid, 'SIGTERM') } catch { /* ignore */ } }
-          } catch { /* ignore */ }
-          try { unlinkSync(pidPath) } catch { /* ignore */ }
+        clearTaskFromQueue(foundName)
+        const pid = readWrapperPid(folderPath)
+        if (pid && pid > 0) {
+          try { process.kill(pid, 'SIGTERM') } catch { /* ignore */ }
         }
+        try { unlinkSync(resolve(folderPath, '.pid')) } catch { /* ignore */ }
         // Rename processing → new (allow retry)
         const newName = `${stemName}_new`
         const dest = resolveQueueFolder(newName)
         if (dest) try { renameSync(folderPath, dest) } catch { /* ignore */ }
-        // Free up a slot — start next task
-        processNextTask()
-        try { appendFileSync(resolveInside(queueDir, '.cancel.log')!, `  → _processing → _new, processNextTask()\n`) } catch {}
+        tryStartNextTask()
+        try { appendFileSync(resolveInside(queueDir, '.cancel.log')!, `  → _processing → _new, tryStartNextTask()\n`) } catch {}
       } else {
         // _wait or _new → user cancelled, archive to _done
         const doneName = `${stemName}_done`
@@ -492,20 +502,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  // ── Execute ──
+  // ── Execute (recovery maintenance — does NOT re-run agents on stuck folders) ──
   if (pathname === `${API_BASE}/execute`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
-    const queueDir = getHingeRoot()
-    if (!existsSync(queueDir)) { json(res, { ok: true, spawned: 0 }); return }
-    const entries = readdirSync(queueDir, { withFileTypes: true })
-    let spawned = 0
-    for (const e of entries) {
-      if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
-      if (runningTasks.has(e.name)) continue
-      spawned++
-      enqueueTask(e.name)
-    }
-    json(res, { ok: true, spawned })
+    const { recovered } = recoverAndSchedule()
+    json(res, { ok: true, recovered })
     return
   }
 
@@ -612,61 +613,6 @@ function readFilePath(filePath: string): string | null {
   try { return readFileSync(abs, 'utf-8') } catch { return null }
 }
 
-// ── Recovery: handle orphaned _processing tasks after server restart ──
-function recoverOrphanedTasks() {
-  const queueDir = getHingeRoot()
-  if (!existsSync(queueDir)) return
-  let entries
-  try { entries = readdirSync(queueDir, { withFileTypes: true }) as Dirent[] } catch { return }
-
-  const orphans = entries.filter(e => e.isDirectory() && e.name.endsWith('_processing'))
-  if (orphans.length > 0) {
-    console.log(`[hinge] Found ${orphans.length} orphaned _processing tasks — recovering...`)
-  for (const e of orphans) {
-    const folderPath = resolveQueueFolder(e.name)
-    if (!folderPath) continue
-    const pidPath = resolveInside(folderPath, '.pid')
-    let pidDead = false
-
-    if (pidPath && existsSync(pidPath)) {
-      try {
-        const raw = readFileSync(pidPath, 'utf-8').trim()
-        const pid = parseInt(raw, 10)
-        if (pid && !isNaN(pid)) {
-          try { process.kill(pid, 0); /* alive */ } catch { pidDead = true }
-        } else {
-          pidDead = true
-        }
-      } catch { pidDead = true }
-    } else {
-      pidDead = true
-    }
-
-    if (pidDead) {
-      // Agent process is gone — move to _done so next task can start
-      if (pidPath) try { unlinkSync(pidPath) } catch { /* ignore */ }
-      const doneName = e.name.replace('_processing', '_done')
-      const doneDest = resolveQueueFolder(doneName)
-      try {
-        if (doneDest) {
-          renameSync(folderPath, doneDest)
-          console.log(`[hinge] Recovered orphan: ${e.name} → ${doneName}`)
-        }
-      } catch (err) {
-        console.error(`[hinge] Failed to recover ${e.name}:`, err)
-      }
-    } else {
-      // PID still alive — track it so processNextTask doesn't start another
-      console.log(`[hinge] Orphan ${e.name} still running (PID alive), tracking.`)
-      runningTasks.add(e.name)
-    }
-  }
-  }
-
-  // Process next waiting task — always, even if no orphans found
-  processNextTask()
-}
-
 // ── Queue helpers ──────────────────────────────────────────
 
 interface QueueItem {
@@ -701,8 +647,8 @@ function appendUserMessage(folderName: string, message: string) {
 function listQueue(): QueueItem[] {
   const queueDir = getHingeRoot()
   if (!existsSync(queueDir)) return []
-  // Auto-recover orphaned _processing tasks on every list
-  recoverOrphanedTasks()
+  // Read-only sync for UI — no recovery side effects on GET
+  syncRunningTasksFromDisk()
   const entries = readdirSync(queueDir, { withFileTypes: true })
   const items: QueueItem[] = []
   for (const e of entries) {
@@ -742,37 +688,7 @@ function listQueue(): QueueItem[] {
     const errorPath = resolveQueueFolder(name, '.error')
     const failed = errorPath ? existsSync(errorPath) : false
     const displayStatus: QueueItem['status'] = failed ? 'error' : status
-    // Agent status for processing tasks
-    let agentStatus: { status: string; pid?: number; elapsed?: number } | null = null
-    if (status === 'processing') {
-      // Calculate elapsed seconds from .pid file mtime (process start time), not folder creation time
-      let elapsed: number | undefined
-      const pidPath = resolveQueueFolder(name, '.pid')
-      if (pidPath && existsSync(pidPath)) {
-        // Use .pid mtime as the authoritative process start time
-        const pidStat = statSync(pidPath)
-        elapsed = Math.floor((Date.now() - pidStat.mtimeMs) / 1000)
-
-        const raw = readFileSync(pidPath, 'utf-8').trim()
-        const pid = parseInt(raw, 10)
-        if (pid && !isNaN(pid)) {
-          try { process.kill(pid, 0); agentStatus = { status: 'running', pid, elapsed } }
-          catch { agentStatus = { status: 'stopped', elapsed } }
-        } else {
-          agentStatus = { status: 'stopped', elapsed }
-        }
-      } else {
-        // Fallback: compute from folder name timestamp if .pid is missing
-        const stem = name.replace(/_(new|wait|done|processing)$/, '')
-        const ts = stem.split('_')[0]
-        if (ts) {
-          const fixed = ts.replace(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4')
-          const startMs = new Date(fixed).getTime()
-          if (!isNaN(startMs)) elapsed = Math.floor((Date.now() - startMs) / 1000)
-        }
-        agentStatus = { status: 'no_pid', elapsed }
-      }
-    }
+    const agentStatus = status === 'processing' ? getAgentStatus(name) : null
     items.push({ name, status: displayStatus, content: content || '', component, note, url, dom, failed, agentStatus } as QueueItem)
   }
   items.sort((a, b) => b.name.localeCompare(a.name))
@@ -844,216 +760,6 @@ function deleteAttachment(folderName: string, fileName: string): boolean {
   if (!filePath) return false
   unlinkSync(filePath)
   return true
-}
-
-// ── Agent runner ───────────────────────────────────────────
-
-function injectAttachments(folderPath: string, prompt: string): string {
-  const attachDir = resolve(folderPath, 'attach')
-  if (!existsSync(attachDir)) return prompt
-  const entries = readdirSync(attachDir, { withFileTypes: true })
-  const files = entries
-    .filter(e => e.isFile() && !e.name.startsWith('.'))
-    .map(e => resolve(attachDir, e.name))
-  if (files.length === 0) return prompt
-  return prompt + '\n\n---\n**Attached files:**\n' +
-    files.map(p => `- \`${p}\``).join('\n') +
-    '\n\nYou can read any of these files to understand the context. When modifying them, write back to the same paths.\n'
-}
-
-function extractLastUserMessage(content: string): string {
-  const sections = content.split(/\n---\n/)
-  for (let i = sections.length - 1; i >= 0; i--) {
-    const match = sections[i].match(/^\*\*User:\*\*\n([\s\S]*)/)
-    if (match) return match[1].trim()
-  }
-  return content.trim()
-}
-
-function runTaskChunk(folderName: string) {
-  runningTasks.add(folderName)
-  const folderPath = resolveQueueFolder(folderName)
-  if (!folderPath) {
-    runningTasks.delete(folderName)
-    processNextTask()
-    return
-  }
-  const chatPath = resolveInside(folderPath, 'chat.md')
-  if (!chatPath || !existsSync(chatPath)) {
-    runningTasks.delete(folderName)
-    const doneDest = resolveQueueFolder(folderName.replace('_processing', '_done'))
-    if (doneDest) try { renameSync(folderPath, doneDest) } catch { /* ignore */ }
-    processNextTask()
-    return
-  }
-
-  const scripts = resolveAgentScripts()
-
-  const alias = folderName.replace(/_processing$/, '')
-  const sessionMarker = resolve(folderPath, '.session')
-  const isFirstRun = !existsSync(sessionMarker)
-
-  const content = readFileSync(chatPath, 'utf-8')
-
-  let agentInput: string
-  let scriptType: string   // "new" or "continue" — used by wrapper
-
-  if (isFirstRun) {
-    agentInput = injectAttachments(folderPath, content)
-    // Prepend system prompt as first message — instructs agent on async mode
-    const prompt = readPrompt()
-    if (prompt) {
-      agentInput = prompt + '\n\n---\n\n' + agentInput
-    }
-    scriptType = 'new'
-    try { writeFileSync(sessionMarker, alias, 'utf-8') } catch { /* ignore */ }
-  } else {
-    agentInput = extractLastUserMessage(content)
-    scriptType = 'continue'
-  }
-
-  const logPath = resolve(folderPath, 'chat.log')
-  try { appendFileSync(logPath, `=== Agent run started: ${new Date().toISOString()} ===\n`, 'utf-8') } catch { /* ignore */ }
-
-  try {
-    const child = spawn('/bin/bash', [scripts.wrapper, alias, scriptType], {
-      shell: false,
-      cwd: process.cwd(),
-      env: { ...process.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true,
-    })
-    child.unref()
-
-    const pidPath = resolve(folderPath, '.pid')
-    try { writeFileSync(pidPath, String(child.pid ?? ''), 'utf-8') } catch { /* ignore */ }
-
-    child.stdin.write(agentInput)
-    child.stdin.end()
-
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
-    child.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString()
-      try { appendFileSync(logPath, d.toString(), 'utf-8') } catch { /* ignore */ }
-    })
-
-    child.on('close', (exitCode) => {
-      runningTasks.delete(folderName)
-
-      // If folder was already renamed by script self-cleanup, nothing to do
-      if (!existsSync(folderPath)) {
-        console.log(`[hinge] Task ${folderName} already cleaned up by script`)
-        processNextTask()
-        return
-      }
-
-      // Mark failed tasks (non-zero exit code)
-      if (exitCode !== 0 && exitCode !== null) {
-        try { writeFileSync(resolve(folderPath, '.error'), String(exitCode), 'utf-8') } catch { /* ignore */ }
-      }
-
-      if (stderr) {
-        try { appendFileSync(logPath, `\n[stderr]\n${stderr}\n`, 'utf-8') } catch {}
-      }
-
-      const finalAnswer = stdout.trim() || '(no output)'
-      const appendix = `\n\n---\n\n**Assistant:**\n${finalAnswer}\n`
-      try {
-        const existing = readFileSync(chatPath, 'utf-8')
-        writeFileSync(chatPath, existing + appendix, 'utf-8')
-      } catch (e: any) {
-        console.error(`[hinge] Failed to write chat.md for ${folderName}:`, e)
-      }
-
-      // Remove .pid BEFORE rename so recovery doesn't try to re-spawn mid-rename
-      try { unlinkSync(resolve(folderPath, '.pid')) } catch {}
-
-      // Rename _processing → _done, THEN pick next task (avoids race)
-      try {
-        const doneName = folderName.replace('_processing', '_done')
-        const doneDest = resolveQueueFolder(doneName)
-        if (doneDest) {
-          renameSync(folderPath, doneDest)
-          console.log(`[hinge] Task ${folderName} → ${doneName}`)
-        }
-      } catch (e: any) {
-        console.error(`[hinge] Failed to rename ${folderName} to _done:`, e)
-      }
-
-      processNextTask()
-    })
-
-    child.on('error', (err) => {
-      console.error(`[hinge] Agent spawn error for ${folderName}:`, err)
-      runningTasks.delete(folderName)
-      try { unlinkSync(resolve(folderPath, '.pid')) } catch {}
-      try {
-        const doneName = folderName.replace('_processing', '_done')
-        const doneDest = resolveQueueFolder(doneName)
-        if (doneDest) {
-          renameSync(folderPath, doneDest)
-          console.log(`[hinge] Error recovery: ${folderName} → ${doneName}`)
-        }
-      } catch (e: any) {
-        console.error(`[hinge] Failed to rename on error for ${folderName}:`, e)
-      }
-      processNextTask()
-    })
-  } catch {
-    runningTasks.delete(folderName)
-    processNextTask()
-  }
-}
-
-// ── Sequential task queue ──────────────────────────────────
-
-function enqueueTask(folderName: string) {
-  if (runningTasks.has(folderName) || taskQueue.includes(folderName)) return
-  taskQueue.push(folderName)
-  processNextTask()
-}
-
-function processNextTask() {
-  // Clean stale runningTasks entries — folders no longer on disk (child completed and renamed)
-  const queueDir = getHingeRoot()
-  for (const task of runningTasks) {
-    const folderPath = resolveQueueFolder(task)
-    if (!folderPath || !existsSync(folderPath)) {
-      runningTasks.delete(task)
-      console.log(`[hinge] Cleaned stale runningTasks: ${task} (folder gone)`)
-    }
-  }
-
-  if (runningTasks.size > 0) return
-
-  if (taskQueue.length > 0) {
-    const next = taskQueue.shift()!
-    runTaskChunk(next)
-    return
-  }
-
-  if (!existsSync(queueDir)) return
-  const entries = readdirSync(queueDir, { withFileTypes: true })
-  const waitFolders = entries
-    .filter(e => e.isDirectory() && e.name.endsWith('_wait'))
-    .sort((a, b) => a.name.localeCompare(b.name))
-  if (waitFolders.length === 0) return
-
-  const waitName = waitFolders[0].name
-  const processingName = waitName.replace('_wait', '_processing')
-  const waitPath = resolveQueueFolder(waitName)
-  const processingPath = resolveQueueFolder(processingName)
-  if (!waitPath || !processingPath) return
-  try {
-    renameSync(waitPath, processingPath)
-  } catch (e: any) {
-    console.error(`[hinge] Failed to promote ${waitName} to _processing:`, e)
-    return
-  }
-
-  runTaskChunk(processingName)
 }
 
 // ── Buffer helpers ─────────────────────────────────────────

@@ -68,6 +68,9 @@ body {
   color: #f0f6fc;
   margin-bottom: 6px;
 }
+.dev-section:first-child .dev-section-title {
+  font-size: calc(36px * var(--dev-fs));
+}
 .dev-section-desc {
   font-size: calc(14px * var(--dev-fs));
   color: #8b949e;

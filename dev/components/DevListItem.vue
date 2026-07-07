@@ -20,7 +20,7 @@ defineEmits<{ select: [] }>()
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #161b22;
+  background: #0891b2;
   border: 1px solid #30363d;
   border-radius: 8px;
   padding: 14px 20px;

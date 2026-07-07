@@ -1,14 +1,71 @@
 import type { Plugin, UserConfig, ProxyOptions } from 'vite'
-import { writeFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
+import { writeFileSync, chmodSync, existsSync, mkdirSync } from 'fs'
 import { resolve } from 'path'
 import { API_BASE } from './const'
 import * as http from 'http'
+import { probeOurHingeApi } from './probeApi'
 
-// ── Server state (module-level, survives Vite HMR) ────────
-let _hingeServerStarted = false
-export function isServerRunning(): boolean { return _hingeServerStarted }
-export function markServerStarted(): void { _hingeServerStarted = true }
-export function resetServerState(): void { _hingeServerStarted = false }
+// ── Server state (globalThis — survives Vite HMR module reload) ────────
+const PLUGIN_STATE_KEY = '__hinge_plugin_state'
+
+interface PluginState {
+  port: number
+  recoveryTimer?: ReturnType<typeof setTimeout>
+  recoveryInterval?: ReturnType<typeof setInterval>
+}
+
+function pluginState(): PluginState {
+  const g = globalThis as unknown as Record<string, PluginState>
+  if (!g[PLUGIN_STATE_KEY]) {
+    g[PLUGIN_STATE_KEY] = { port: 0 }
+  }
+  return g[PLUGIN_STATE_KEY]
+}
+
+function clearRecoveryTimers(): void {
+  const state = pluginState()
+  if (state.recoveryTimer) clearTimeout(state.recoveryTimer)
+  if (state.recoveryInterval) clearInterval(state.recoveryInterval)
+  state.recoveryTimer = undefined
+  state.recoveryInterval = undefined
+}
+
+function findRegisteredApiPort(start = 5177, end = 5197): number | null {
+  const g = globalThis as Record<string, unknown>
+  for (let p = start; p <= end; p++) {
+    if (g[`__hinge_api_server_${p}`]) return p
+  }
+  return null
+}
+
+async function resolveApiPort(explicit?: number): Promise<number> {
+  const state = pluginState()
+
+  // Same Node process after HMR — server object still in globalThis
+  const registered = findRegisteredApiPort(5177, 5197)
+  if (registered) {
+    state.port = registered
+    return registered
+  }
+
+  // Remembered port from earlier in this session (same project only)
+  if (state.port && await probeOurHingeApi(state.port)) {
+    return state.port
+  }
+
+  // Orphan from a previous `pnpm dev` of THIS project — reuse if it responds
+  for (let p = 5177; p <= 5197; p++) {
+    if (await probeOurHingeApi(p)) {
+      console.log(`[hinge] Reusing existing API server on :${p}`)
+      state.port = p
+      return p
+    }
+  }
+
+  const port = explicit ?? await findFreePort(5177)
+  state.port = port
+  return port
+}
 
 // ── Agent script templates ─────────────────────────────────
 const SCRIPT_NEW_SESSION = `#!/bin/bash
@@ -124,7 +181,10 @@ for seg in segments:
 const SCRIPT_AGENT_WRAPPER = `#!/bin/bash
 # .agent-wrapper.sh — Hinge internal cleanup wrapper
 # AUTO-GENERATED — do not edit.
-# NOTE: no 'set -e' — errors handled explicitly with || true
+#
+# Sole owner of: chat.md assistant reply, .pid, .session (on first success), _processing → _done.
+# Server spawns this detached and only schedules the next _wait task when wrapper exits.
+# NOTE: no 'set -e'
 ALIAS="$1"
 SCRIPT_TYPE="$2"
 DIR="$(dirname "$0")"
@@ -132,25 +192,30 @@ FOLDER="$DIR/\${ALIAS}_processing"
 PID_FILE="$FOLDER/.pid"
 CHAT_MD="$FOLDER/chat.md"
 
-# Trap SIGTERM/SIGINT so a kill from Node timeout cleans up properly
+# On cancel (SIGTERM): drop pid only — server renames folder to _new
 _cleanup() {
   rm -f "$PID_FILE" 2>/dev/null || true
-  mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
   exit 0
 }
 trap _cleanup TERM INT
 
 echo "$$" > "$PID_FILE" 2>/dev/null || true
+
 if [ "$SCRIPT_TYPE" = "continue" ]; then
     USER_SCRIPT="$DIR/continue-session.sh"
 else
     USER_SCRIPT="$DIR/new-session.sh"
 fi
+
 OUTPUT=$("$USER_SCRIPT" "$ALIAS")
 CODE=$?
-if [ -f "$CHAT_MD" ] && [ -n "$OUTPUT" ]; then
-    printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "$OUTPUT" >> "$CHAT_MD"
+
+printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "\${OUTPUT:-*(no output)*}" >> "$CHAT_MD"
+
+if [ "$SCRIPT_TYPE" = "new" ] && [ "$CODE" -eq 0 ]; then
+  touch "$FOLDER/.session" 2>/dev/null || true
 fi
+
 echo "$OUTPUT" || true
 rm -f "$PID_FILE" 2>/dev/null || true
 mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
@@ -211,8 +276,7 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
     name: 'hinge-plugin',
 
     async config(userConfig: UserConfig) {
-      // Auto-detect free port if not explicitly set
-      port = options.serverPort ?? await findFreePort(5177)
+      port = await resolveApiPort(options.serverPort)
       // Inject Vite proxy — forward /hinge-api/* to the hinge API server
       const existingProxy = (userConfig.server as any)?.proxy ?? {}
       return {
@@ -236,71 +300,56 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
     },
 
     configureServer() {
-      // Auto-generate agent scripts if missing
       ensureScripts()
 
-      // Start the API server once (survives Vite HMR)
-      if (!isServerRunning()) {
-        markServerStarted()
-        // Dynamic import — avoids bundling server.ts in the component build
-        import('./server').then(({ startHingeServer }) => {
+      const state = pluginState()
+      clearRecoveryTimers()
+
+      import('./server').then(async ({ startHingeServer }) => {
+        const alive = await probeOurHingeApi(port)
+        if (!alive) {
           startHingeServer(port)
           console.log(`[hinge] API server on :${port}, proxy ${API_BASE}/* → :${port}`)
-        }).catch((e) => {
-          console.error('[hinge] Failed to start API server:', e)
-        })
-      }
+        } else {
+          console.log(`[hinge] API server already on :${port} (reused)`)
+        }
+      }).catch((e) => {
+        console.error('[hinge] Failed to start API server:', e)
+      })
 
-      // Auto-recover stuck _processing folders — periodic check
       const RECOVERY_INTERVAL_MS = 5 * 60 * 1000
 
-      function recoverStuckTasks() {
-        const queueDir = resolve(process.cwd(), '.hinge')
-        if (!existsSync(queueDir)) return
-        const entries = readdirSync(queueDir, { withFileTypes: true })
-        const recovered: string[] = []
-        for (const e of entries) {
-          if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
-          const pidPath = resolve(queueDir, e.name, '.pid')
-          let pidAlive = false
-          if (existsSync(pidPath)) {
-            const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
-            if (!isNaN(pid)) {
-              try { process.kill(pid, 0); pidAlive = true } catch { /* dead */ }
-            }
-          }
-          if (!pidAlive) recovered.push(e.name)
-        }
-        if (recovered.length > 0) {
-          const req = http.request(
-            { hostname: 'localhost', port, path: `${API_BASE}/execute`, method: 'POST' },
-            (r: any) => {
-              let body = ''
-              r.on('data', (d: string) => body += d)
-              r.on('end', () => {
+      function runRecovery() {
+        const req = http.request(
+          { hostname: 'localhost', port, path: `${API_BASE}/execute`, method: 'POST' },
+          (r: any) => {
+            let body = ''
+            r.on('data', (d: string) => body += d)
+            r.on('end', () => {
+              try {
                 const result = JSON.parse(body)
-                if (result.spawned > 0) {
-                  console.log(`[hinge] Recovered ${result.spawned} stuck task(s)`)
+                if (result.recovered > 0) {
+                  console.log(`[hinge] Recovered ${result.recovered} dead task(s)`)
                 }
-              })
-            }
-          )
-          req.on('error', () => { /* server not ready yet */ })
-          req.end()
-        }
+              } catch { /* ignore */ }
+            })
+          },
+        )
+        req.on('error', () => { /* server not ready yet */ })
+        req.end()
       }
 
-      // First check after 1s, then every 5 minutes
-      setTimeout(recoverStuckTasks, 1000)
-      setInterval(recoverStuckTasks, RECOVERY_INTERVAL_MS)
-      console.log(`[hinge] Recovery: every ${RECOVERY_INTERVAL_MS / 60000} min, first check in 1s`)
+      state.recoveryTimer = setTimeout(runRecovery, 5000)
+      state.recoveryInterval = setInterval(runRecovery, RECOVERY_INTERVAL_MS)
+      console.log(`[hinge] Recovery: every ${RECOVERY_INTERVAL_MS / 60000} min, first check in 5s`)
     },
 
     closeBundle() {
-      if (isServerRunning()) {
-        import('./server').then(({ stopHingeServer }) => stopHingeServer(port))
-        resetServerState()
-      }
+      clearRecoveryTimers()
+      import('./server').then(({ stopHingeServer }) => {
+        const p = pluginState().port
+        if (p) stopHingeServer(p)
+      })
     },
   }
 }

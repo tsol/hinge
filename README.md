@@ -359,3 +359,9 @@ src/
 Vibecoding is amazing for rapid prototyping. But sometimes you want to see what the agent changed, browse the file tree, and have a real conversation with the code — not just a one-shot prompt.
 
 HINGE bridges that gap: the tactile feel of a full IDE, the convenience of a browser overlay, the power of agent-driven code modification. Use it on desktop. Use it on mobile. Use it anywhere you have a browser and an idea.
+
+---
+
+## Related
+
+- [tsol/hinge-projects](https://github.com/tsol/hinge-projects) — `project.sh`, scaffolding, one-command install with Hermes + Cloudflare tunnels

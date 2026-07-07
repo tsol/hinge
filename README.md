@@ -290,7 +290,7 @@ server, integration tests). Normal consumer setup uses **middleware only** — y
 ### Process management (Hermes / project.sh)
 
 Production workflow uses [`../project.sh`](../project.sh) — not raw `pnpm dev`.
-See [`../hinge-projects-skill/SKILL.md`](../hinge-projects-skill/SKILL.md) for the full agent skill.
+See [`../skills/hinge-projects.md`](../skills/hinge-projects.md) for the full agent skill.
 
 ```bash
 # from the directory containing project.sh:

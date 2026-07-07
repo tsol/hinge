@@ -390,7 +390,9 @@ function runTaskChunkUnlocked(folderName: string): void {
   if (isFirstRun) {
     agentInput = injectAttachments(folderPath, content)
     const prompt = readPrompt()
-    if (prompt) agentInput = prompt + '\n\n---\n\n' + agentInput
+    if (prompt) {
+      agentInput = `Working in: ${process.cwd()}\n\n${prompt}` + '\n\n---\n\n' + agentInput
+    }
   } else {
     agentInput = extractLastUserMessage(content)
   }

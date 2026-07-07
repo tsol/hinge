@@ -3,11 +3,8 @@ import { resolve } from 'path'
 
 // ── Built-in default system prompt (ships with package) ──
 // User overrides via .hinge/prompt.md
-export const DEFAULT_PROMPT_TEXT = `# Hinge Panel
-
-Context: full task description in conversation history.
-
-## Instructions
+export const DEFAULT_PROMPT_TEXT = `## Instructions
+- Your task is described in the user message below.
 - If you need to ask a clarifying question — just ask it directly in your response and finish. Do not use the clarify tool (there is no human to answer in non-interactive mode).`
 
 /**

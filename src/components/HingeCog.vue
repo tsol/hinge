@@ -250,11 +250,11 @@ const wrapStyle = computed(() => ({
   position: absolute !important;
   left: 50% !important;
   bottom: 0 !important;
-  transform: translate(-50%, 45%) !important;
-  width: 34px !important;
-  height: 34px !important;
+  transform: translate(-50%, 40%) !important;
+  width: 28px !important;
+  height: 28px !important;
   border-radius: 50% !important;
-  background: radial-gradient(circle, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0) 72%) !important;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.35) 0%, rgba(0, 0, 0, 0) 72%) !important;
   z-index: -1 !important;
   pointer-events: none !important;
 }

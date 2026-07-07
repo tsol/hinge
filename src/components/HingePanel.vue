@@ -151,6 +151,8 @@ const resizing = ref(false)
 const drawerRef = ref<HTMLDivElement | null>(null)
 
 onMounted(() => {
+  // Always start on input tab when panel opens
+  activeTab.value = 'input'
   // Auto-resize textarea to content
   setTimeout(autoResizeTextarea, 50)
 })

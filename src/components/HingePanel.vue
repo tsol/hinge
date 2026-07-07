@@ -5,7 +5,10 @@ import type { TaskModel } from '../composables/useTaskModel'
 import { useFileTree, type FileEntry } from '../composables/useFileTree'
 import { useFileSource } from '../composables/useFileSource'
 import { useSelectionStore } from '../composables/useSelectionStore'
-import { syncHighlights } from '../composables/useElementHighlights'
+import { syncAttachmentHighlights } from '../composables/useElementHighlights'
+import { useModeDropdown } from '../composables/useModeDropdown'
+import { highlightLangForPath } from '../utils/highlightLang'
+import { patchQueueContent } from '../utils/queueApi'
 import { useI18n } from '../composables/useI18n'
 import { usePersistedState } from '../composables/usePersistedState'
 import HingeTabQueue from './HingeTabQueue.vue'
@@ -73,9 +76,9 @@ const activeTab = computed({
 const fileMentioned = ref(false)
 
 watch(
-  () => [selection.filePath, props.model.files.value.map(s => s.value)],
+  () => [selection.filePath, props.model.filePaths.value],
   ([path, files]) => {
-    fileMentioned.value = !!path && files.includes(path as string)
+    fileMentioned.value = !!path && (files as string[]).includes(path as string)
   },
   { immediate: true },
 )
@@ -103,7 +106,6 @@ const fileTree = useFileTree()
 const fileSrc = useFileSource()
 const queueRefreshKey = ref(0)
 const editingFile = ref('')
-const editingNoteRef = ref('')
 const queueRef = ref<InstanceType<typeof HingeTabQueue> | null>(null)
 
 // ─── Log polling (auto-refresh chat.log in Source tab) ──
@@ -181,51 +183,36 @@ function startResize(e: PointerEvent) {
 
 function onAdd() {
   if (editingFile.value) {
-    // Save edit — increment key after PATCH completes
-    fetch(`${API_BASE}/queue`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: editingFile.value, content: note.value }),
-    }).then(() => {
+    patchQueueContent(editingFile.value, note.value).then(() => {
       editingFile.value = ''
-      editingNoteRef.value = ''
       queueRefreshKey.value++
     })
   } else {
-    // Delegate to parent (Hinge.vue sends the POST).
-    // Key increment happens via onSuccess callback after POST completes.
     emit('send', () => queueRefreshKey.value++)
   }
 }
 
 function onEditTask(item: { name: string; content: string }) {
   editingFile.value = item.name
-  editingNoteRef.value = item.content
   note.value = item.content
+  activeTab.value = 'input'
 }
 
 type ExecMode = 'execute' | 'stop' | 'delete'
+const allModes: ExecMode[] = ['execute', 'stop', 'delete']
 
 const execMode = computed({
   get: () => panelExec.mode as ExecMode,
   set: (v: ExecMode) => { panelExec.mode = v },
 })
-const showModeDropdown = ref(false)
-const dropdownUp = ref(false)
 const chevronRef = ref<HTMLElement | null>(null)
-
-function toggleModeDropdown() {
-  showModeDropdown.value = !showModeDropdown.value
-  if (showModeDropdown.value) {
-    nextTick(() => {
-      const btn = chevronRef.value
-      if (!btn) return
-      const rect = btn.getBoundingClientRect()
-      const dropdownH = 42 + allModes.length * 34 // approx: padding + items height
-      dropdownUp.value = rect.bottom + dropdownH + 8 > window.innerHeight
-    })
-  }
-}
+const {
+  open: showModeDropdown,
+  opensUpward: dropdownUp,
+  toggle: toggleModeDropdown,
+  close: closeModeDropdown,
+  onOutsideClick: onModeOutsideClick,
+} = useModeDropdown(chevronRef, allModes.length)
 
 const modeLabels = computed((): Record<ExecMode, string> => ({
   execute: lang.value.execute,
@@ -233,19 +220,14 @@ const modeLabels = computed((): Record<ExecMode, string> => ({
   delete: lang.value.delete,
 }))
 
-const allModes: ExecMode[] = ['execute', 'stop', 'delete']
-
 function setMode(mode: ExecMode) {
   execMode.value = mode
-  showModeDropdown.value = false
+  closeModeDropdown()
 }
 
 // Close dropdown on outside click
 function onDocClick(e: MouseEvent) {
-  const target = e.target as HTMLElement
-  if (!target.closest('.segmented-btn')) {
-    showModeDropdown.value = false
-  }
+  onModeOutsideClick(e, '.segmented-btn')
 }
 
 onMounted(() => document.addEventListener('click', onDocClick))
@@ -342,17 +324,7 @@ const highlightedCode = computed(() => {
   if (!content) return ''
   const path = selection.filePath
   if (!path) return `<code class="hljs">${hljs.highlightAuto(content).value}</code>`
-  const ext = path.split('.').pop()?.toLowerCase()
-  const langMap: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-    vue: 'html', html: 'html', htm: 'html', svg: 'xml',
-    css: 'css', scss: 'scss', sass: 'scss', less: 'scss',
-    json: 'json', jsonc: 'json',
-    md: 'markdown', mdx: 'markdown',
-    yaml: 'yaml', yml: 'yaml',
-    sh: 'bash', bash: 'bash', zsh: 'bash',
-  }
-  const lang = langMap[ext ?? ''] || ''
+  const lang = highlightLangForPath(path)
   if (lang && hljs.getLanguage(lang)) {
     return `<code class="hljs">${hljs.highlight(content, { language: lang }).value}</code>`
   }
@@ -507,10 +479,14 @@ watch(() => selection.filePath, (filePath) => {
   }
 }, { immediate: true })
 
-// When textarea changes → sync DOM highlights with current components + auto-resize
+// Sync DOM highlights when attachments change
+watch(
+  () => props.model.attachments.value,
+  (attachments) => syncAttachmentHighlights(attachments),
+  { deep: true, immediate: true },
+)
+
 watch(() => note.value, () => {
-  const active = props.model.components.value.map(s => s.value)
-  syncHighlights(active)
   nextTick(autoResizeTextarea)
 })
 
@@ -681,7 +657,7 @@ const { level: fontLevel, setLevel: setFontLevel, labels: fontLabels, levels: fo
                 <button
                   v-if="editingFile"
                   class="drawer-btn drawer-btn--cancel"
-                  @click="editingFile = ''; editingNoteRef = ''"
+                  @click="editingFile = ''"
                 >
                   ✕
                 </button>
@@ -1472,44 +1448,6 @@ const { level: fontLevel, setLevel: setFontLevel, labels: fontLabels, levels: fo
   background: rgba(88, 166, 255, 0.3);
 }
 
-/* Execute result banner */
-.exec-result {
-  margin: 8px 14px 14px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: #0d2818;
-  border: 1px solid #238636;
-  position: relative;
-  max-height: calc(200px * var(--hinge-scale, 1));
-  overflow-y: auto;
-}
-
-.exec-result--err {
-  background: #2d0f0f;
-  border-color: #da3633;
-}
-.exec-result__close {
-  position: sticky;
-  top: 0;
-  float: right;
-  background: none;
-  border: none;
-  color: #888;
-  cursor: pointer;
-  font-size: var(--hinge-fs-12, 12px);
-  padding: 2px 4px;
-}
-.exec-result__text {
-  margin: 0;
-  font-size: var(--hinge-fs-11, 11px);
-  line-height: 1.5;
-  font-family: ui-monospace, 'SF Mono', monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: #e0e0e0;
-}
-
-/* Settings gear button */
 /* ── Settings tab ── */
 .settings-scroll {
   flex: 1;

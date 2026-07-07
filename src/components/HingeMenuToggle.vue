@@ -4,6 +4,7 @@ import { COG_SIZE } from '../constants'
 
 defineProps<{
   menuOpen: boolean
+  badgeCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -97,6 +98,10 @@ function clampPosition() {
       <span></span>
       <span></span>
       <span></span>
+      <span
+        v-if="badgeCount && badgeCount > 0"
+        class="menu-badge"
+      >{{ badgeCount > 99 ? '99+' : badgeCount }}</span>
     </div>
   </div>
 </template>
@@ -113,6 +118,7 @@ function clampPosition() {
 }
 
 .burger-icon {
+  position: relative !important;
   width: 40px !important;
   height: 40px !important;
   display: flex !important;
@@ -140,7 +146,7 @@ function clampPosition() {
   cursor: grabbing !important;
 }
 
-.burger-icon span {
+.burger-icon span:not(.menu-badge) {
   display: block !important;
   width: 20px !important;
   height: 3px !important;
@@ -159,5 +165,24 @@ function clampPosition() {
 
 .menu-toggle--open .burger-icon span:nth-child(3) {
   transform: translateY(-7px) rotate(-45deg) !important;
+}
+
+.menu-badge {
+  position: absolute !important;
+  top: -2px !important;
+  right: -2px !important;
+  min-width: 16px !important;
+  height: 16px !important;
+  padding: 0 4px !important;
+  border-radius: 8px !important;
+  background: #da3633 !important;
+  color: #fff !important;
+  font-size: var(--hinge-fs-10, 10px) !important;
+  font-weight: 700 !important;
+  line-height: 16px !important;
+  text-align: center !important;
+  pointer-events: none !important;
+  width: auto !important;
+  height: 16px !important;
 }
 </style>

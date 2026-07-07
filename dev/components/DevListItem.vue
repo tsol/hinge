@@ -20,12 +20,19 @@ defineEmits<{ select: [] }>()
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #0891b2;
-  border: 1px solid #30363d;
+  background: linear-gradient(135deg,
+    rgba(255, 50, 50, 0.14),
+    rgba(255, 160, 30, 0.10),
+    rgba(255, 215, 0, 0.08),
+    rgba(50, 200, 50, 0.08),
+    rgba(40, 130, 255, 0.10),
+    rgba(160, 60, 255, 0.12));
+  border: 1px solid rgba(160, 60, 255, 0.25);
   border-radius: 8px;
   padding: 14px 20px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  backdrop-filter: blur(4px);
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
   font-size: calc(14px * var(--dev-fs));
 }
 .dev-list-item:hover {

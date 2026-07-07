@@ -12,7 +12,7 @@
  *   On wrapper exit: free slot, maybe recover dead folder, start next `_wait`.
  *
  * **Recovery** (`recoverDeadTasks`):
- *   Only for `_processing` folders whose `.pid` is missing or dead → rename to `_done`.
+ *   Only for `_processing` folders where `inspectWrapper()` is not `running`.
  *   Never re-spawns the agent on a stuck folder.
  *
  * ## Why recovery exists
@@ -44,7 +44,16 @@ function getTaskQueue(): string[] {
   return g.__hinge_task_queue as string[]
 }
 
-// ── Wrapper PID on disk (written only by .agent-wrapper.sh) ─────────────────
+// ── Wrapper liveness (.pid written by .agent-wrapper.sh) ───────────────────
+
+export type WrapperLiveness = 'running' | 'stopped' | 'no_pid'
+
+export interface WrapperLivenessInfo {
+  liveness: WrapperLiveness
+  pid?: number
+  /** Seconds since .pid mtime, or folder-name timestamp when no .pid yet */
+  elapsed?: number
+}
 
 export function readWrapperPid(folderPath: string): number | null {
   const pidPath = resolveInside(folderPath, '.pid')
@@ -57,15 +66,109 @@ export function readWrapperPid(folderPath: string): number | null {
   }
 }
 
-export function isWrapperAlive(folderPath: string): boolean {
-  const pid = readWrapperPid(folderPath)
-  if (!pid) return false
+function elapsedFromFolderName(folderName: string): number | undefined {
+  const stem = folderName.replace(/_processing$/, '')
+  const ts = stem.split('_')[0]
+  if (!ts) return undefined
+  const fixed = ts.replace(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4')
+  const startMs = new Date(fixed).getTime()
+  if (isNaN(startMs)) return undefined
+  return Math.floor((Date.now() - startMs) / 1000)
+}
+
+function probePidFile(pidPath: string): WrapperLivenessInfo | null {
+  if (!existsSync(pidPath)) return null
+  const elapsed = Math.floor((Date.now() - statSync(pidPath).mtimeMs) / 1000)
   try {
-    process.kill(pid, 0)
-    return true
+    const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
+    if (!pid || isNaN(pid)) return { liveness: 'stopped', elapsed }
+    try {
+      process.kill(pid, 0)
+      return { liveness: 'running', pid, elapsed }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      // EPERM = process exists but not signalable — still alive
+      if (code === 'EPERM') return { liveness: 'running', pid, elapsed }
+      return { liveness: 'stopped', pid, elapsed }
+    }
   } catch {
-    return false
+    return { liveness: 'stopped', elapsed }
   }
+}
+
+function taskAlias(folderName: string): string {
+  return folderName.replace(/_(new|wait|done|processing)$/, '')
+}
+
+function wrapperPidCandidates(folderPath: string, folderName: string): string[] {
+  const alias = taskAlias(folderName)
+  const queueDir = getHingeRoot()
+  const paths: string[] = []
+
+  const rootPid = queueDir ? resolveInside(queueDir, `.wrapper_${alias}.pid`) : null
+  if (rootPid) paths.push(rootPid)
+
+  const inFolder = resolveInside(folderPath, '.pid')
+  if (inFolder) paths.push(inFolder)
+
+  if (folderName.endsWith('_processing')) {
+    const donePath = resolveQueueFolder(folderName.replace('_processing', '_done'))
+    const donePid = donePath ? resolveInside(donePath, '.pid') : null
+    if (donePid) paths.push(donePid)
+  }
+
+  return paths
+}
+
+/** Probe wrapper by task stem — survives _processing → _done rename during recovery race. */
+export function inspectWrapperByAlias(alias: string): WrapperLivenessInfo {
+  const queueDir = getHingeRoot()
+  const paths: string[] = []
+
+  const rootPid = queueDir ? resolveInside(queueDir, `.wrapper_${alias}.pid`) : null
+  if (rootPid) paths.push(rootPid)
+
+  for (const suffix of ['_processing', '_done'] as const) {
+    const folderPath = resolveQueueFolder(`${alias}${suffix}`)
+    if (!folderPath) continue
+    const pidPath = resolveInside(folderPath, '.pid')
+    if (pidPath) paths.push(pidPath)
+  }
+
+  for (const pidPath of paths) {
+    const probe = probePidFile(pidPath)
+    if (probe?.liveness === 'running') return probe
+  }
+  for (const pidPath of paths) {
+    const probe = probePidFile(pidPath)
+    if (probe) return probe
+  }
+
+  return { liveness: 'no_pid', elapsed: elapsedFromFolderName(`${alias}_processing`) }
+}
+
+/**
+ * Single source of truth: read `.pid`, probe process with kill(0), derive elapsed.
+ * Used by recovery, queue UI (agentStatus), cancel, and spawn guards.
+ */
+export function inspectWrapper(folderPath: string, folderName?: string): WrapperLivenessInfo {
+  const name = folderName ?? folderPath.split(/[/\\]/).pop() ?? ''
+
+  for (const pidPath of wrapperPidCandidates(folderPath, name)) {
+    const probe = probePidFile(pidPath)
+    if (probe?.liveness === 'running') return probe
+  }
+  for (const pidPath of wrapperPidCandidates(folderPath, name)) {
+    const probe = probePidFile(pidPath)
+    if (probe) return probe
+  }
+
+  return inspectWrapperByAlias(taskAlias(name))
+}
+
+/** True when wrapper bash process is alive (`.pid` + kill(0)). */
+export function isWrapperAlive(folderPath: string): boolean {
+  return inspectWrapper(folderPath).liveness === 'running'
 }
 
 /** Reconcile in-memory slot with disk after HMR or before scheduling. */
@@ -75,10 +178,11 @@ export function syncRunningTasksFromDisk(): void {
   if (!existsSync(queueDir)) return
 
   for (const name of [...runningTasks]) {
+    const alias = taskAlias(name)
     const folderPath = resolveQueueFolder(name)
-    if (!folderPath || !existsSync(folderPath) || !isWrapperAlive(folderPath)) {
-      runningTasks.delete(name)
-    }
+    const alive = inspectWrapperByAlias(alias).liveness === 'running'
+      || (folderPath !== null && existsSync(folderPath) && isWrapperAlive(folderPath))
+    if (!alive) runningTasks.delete(name)
   }
 
   for (const e of readdirSync(queueDir, { withFileTypes: true })) {
@@ -91,10 +195,11 @@ export function syncRunningTasksFromDisk(): void {
 }
 
 /**
- * Move `_processing` folders with dead/missing wrapper PID to `_done`.
- * Does NOT start new agent runs on those folders.
+ * Move `_processing` folders whose wrapper is not running to `_done`.
+ * Uses `inspectWrapper()` — same PID probe as queue agentStatus / cancel.
  */
 export function recoverDeadTasks(): number {
+  syncRunningTasksFromDisk()
   const queueDir = getHingeRoot()
   if (!existsSync(queueDir)) return 0
 
@@ -104,17 +209,25 @@ export function recoverDeadTasks(): number {
   for (const e of readdirSync(queueDir, { withFileTypes: true })) {
     if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
     const folderPath = resolveQueueFolder(e.name)
-    if (!folderPath || isWrapperAlive(folderPath)) continue
+    if (!folderPath) continue
 
-    const pidPath = resolveInside(folderPath, '.pid')
-    if (pidPath) try { unlinkSync(pidPath) } catch { /* ignore */ }
+    const { liveness } = inspectWrapper(folderPath, e.name)
+    if (liveness === 'running') continue
+    if (inspectWrapperByAlias(taskAlias(e.name)).liveness === 'running') continue
+    // Spawn in flight — wrapper may not have written .pid yet
+    if (runningTasks.has(e.name)) continue
+
+    if (liveness === 'stopped') {
+      const pidPath = resolveInside(folderPath, '.pid')
+      if (pidPath) try { unlinkSync(pidPath) } catch { /* ignore */ }
+    }
 
     const doneName = e.name.replace('_processing', '_done')
     const doneDest = resolveQueueFolder(doneName)
     try {
       if (doneDest) {
         renameSync(folderPath, doneDest)
-        console.log(`[hinge] Recovered dead task: ${e.name} → ${doneName}`)
+        console.log(`[hinge] Recovered dead task: ${e.name} → ${doneName} (${liveness})`)
         recovered++
       }
     } catch (err) {
@@ -221,23 +334,14 @@ export function runTaskChunk(folderName: string): void {
 
     child.on('close', () => {
       runningTasks.delete(folderName)
-
-      // Happy path: wrapper renamed folder to _done
-      if (!existsSync(folderPath)) {
-        tryStartNextTask()
-        return
-      }
-
-      // Wrapper exited but folder still _processing — dead wrapper, let recovery rename
-      console.log(`[hinge] Wrapper exited without rename for ${folderName} — recovering`)
-      recoverDeadTasks()
+      syncRunningTasksFromDisk()
       tryStartNextTask()
     })
 
     child.on('error', (err) => {
       console.error(`[hinge] Agent spawn error for ${folderName}:`, err)
       runningTasks.delete(folderName)
-      recoverDeadTasks()
+      syncRunningTasksFromDisk()
       tryStartNextTask()
     })
   } catch {
@@ -303,36 +407,16 @@ export function recoverAndSchedule(): { recovered: number } {
   return { recovered }
 }
 
-/** For queue UI: is wrapper running for this processing folder? */
+/** For queue UI and GET /wrapper — wrapper liveness for a queue folder or stem. */
 export function getAgentStatus(folderName: string): {
-  status: string
+  status: WrapperLiveness
   pid?: number
   elapsed?: number
 } | null {
-  if (!folderName.endsWith('_processing')) return null
-  const folderPath = resolveQueueFolder(folderName)
-  if (!folderPath) return null
-
-  const pidPath = resolveInside(folderPath, '.pid')
-  let elapsed: number | undefined
-
-  if (pidPath && existsSync(pidPath)) {
-    elapsed = Math.floor((Date.now() - statSync(pidPath).mtimeMs) / 1000)
-    const pid = readWrapperPid(folderPath)
-    if (pid && isWrapperAlive(folderPath)) {
-      return { status: 'running', pid, elapsed }
-    }
-    return { status: 'stopped', elapsed }
-  }
-
-  const stem = folderName.replace(/_processing$/, '')
-  const ts = stem.split('_')[0]
-  if (ts) {
-    const fixed = ts.replace(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/, '$1T$2:$3:$4')
-    const startMs = new Date(fixed).getTime()
-    if (!isNaN(startMs)) elapsed = Math.floor((Date.now() - startMs) / 1000)
-  }
-  return { status: 'no_pid', elapsed }
+  const alias = taskAlias(folderName)
+  const info = inspectWrapperByAlias(alias)
+  if (info.liveness === 'no_pid') return null
+  return { status: info.liveness, pid: info.pid, elapsed: info.elapsed }
 }
 
 export function isTaskRunning(folderName: string): boolean {

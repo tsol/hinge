@@ -1,5 +1,6 @@
 import { API_BASE } from '../const'
 import { ref, computed } from 'vue'
+import { highlightLangForPath } from '../utils/highlightLang'
 
 export function useFileSource() {
   const content = ref('')
@@ -24,28 +25,7 @@ export function useFileSource() {
     }
   }
 
-  function clear() {
-    content.value = ''
-    path.value = ''
-    error.value = null
-  }
+  const lang = computed(() => highlightLangForPath(path.value) || 'plaintext')
 
-  const lang = computed(() => {
-    const ext = path.value.split('.').pop()?.toLowerCase()
-    const map: Record<string, string> = {
-      ts: 'typescript',
-      vue: 'vue',
-      js: 'javascript',
-      html: 'html',
-      css: 'css',
-      scss: 'scss',
-      json: 'json',
-      md: 'markdown',
-      yaml: 'yaml',
-      yml: 'yaml',
-    }
-    return map[ext ?? ''] || 'plaintext'
-  })
-
-  return { content, path, loading, error, loadFile, clear, lang }
+  return { content, path, loading, error, loadFile, lang }
 }

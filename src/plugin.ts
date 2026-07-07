@@ -30,19 +30,13 @@ function clearRecoveryTimers(): void {
   state.recoveryInterval = undefined
 }
 
-function findRegisteredApiPort(start = 5177, end = 5197): number | null {
-  const g = globalThis as Record<string, unknown>
-  for (let p = start; p <= end; p++) {
-    if (g[`__hinge_api_server_${p}`]) return p
-  }
-  return null
-}
+import { API_PORT_START, API_PORT_END, findRegisteredApiPort } from './utils/portRegistry'
 
 async function resolveApiPort(explicit?: number): Promise<number> {
   const state = pluginState()
 
   // Same Node process after HMR — server object still in globalThis
-  const registered = findRegisteredApiPort(5177, 5197)
+  const registered = findRegisteredApiPort(API_PORT_START, API_PORT_END)
   if (registered) {
     state.port = registered
     return registered
@@ -54,7 +48,7 @@ async function resolveApiPort(explicit?: number): Promise<number> {
   }
 
   // Orphan from a previous `pnpm dev` of THIS project — reuse if it responds
-  for (let p = 5177; p <= 5197; p++) {
+  for (let p = API_PORT_START; p <= API_PORT_END; p++) {
     if (await probeOurHingeApi(p)) {
       console.log(`[hinge] Reusing existing API server on :${p}`)
       state.port = p
@@ -62,7 +56,7 @@ async function resolveApiPort(explicit?: number): Promise<number> {
     }
   }
 
-  const port = explicit ?? await findFreePort(5177)
+  const port = explicit ?? await findFreePort(API_PORT_START)
   state.port = port
   return port
 }
@@ -188,18 +182,28 @@ const SCRIPT_AGENT_WRAPPER = `#!/bin/bash
 ALIAS="$1"
 SCRIPT_TYPE="$2"
 DIR="$(dirname "$0")"
-FOLDER="$DIR/\${ALIAS}_processing"
-PID_FILE="$FOLDER/.pid"
-CHAT_MD="$FOLDER/chat.md"
+PROC="$DIR/\${ALIAS}_processing"
+DONE="$DIR/\${ALIAS}_done"
+PID_FILE="$PROC/.pid"
+WRAPPER_PID="$DIR/.wrapper_\${ALIAS}.pid"
+
+_resolve_folder() {
+  if [ -d "$PROC" ]; then echo "$PROC"
+  elif [ -d "$DONE" ]; then echo "$DONE"
+  else echo ""
+  fi
+}
 
 # On cancel (SIGTERM): drop pid only — server renames folder to _new
 _cleanup() {
-  rm -f "$PID_FILE" 2>/dev/null || true
+  rm -f "$PID_FILE" "$DONE/.pid" "$WRAPPER_PID" 2>/dev/null || true
   exit 0
 }
 trap _cleanup TERM INT
 
+mkdir -p "$PROC" 2>/dev/null || true
 echo "$$" > "$PID_FILE" 2>/dev/null || true
+echo "$$" > "$WRAPPER_PID" 2>/dev/null || true
 
 if [ "$SCRIPT_TYPE" = "continue" ]; then
     USER_SCRIPT="$DIR/continue-session.sh"
@@ -210,6 +214,13 @@ fi
 OUTPUT=$("$USER_SCRIPT" "$ALIAS")
 CODE=$?
 
+FOLDER="$(_resolve_folder)"
+if [ -z "$FOLDER" ]; then
+  FOLDER="$DONE"
+  mkdir -p "$FOLDER" 2>/dev/null || true
+fi
+CHAT_MD="$FOLDER/chat.md"
+
 printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "\${OUTPUT:-*(no output)*}" >> "$CHAT_MD"
 
 if [ "$SCRIPT_TYPE" = "new" ] && [ "$CODE" -eq 0 ]; then
@@ -217,8 +228,10 @@ if [ "$SCRIPT_TYPE" = "new" ] && [ "$CODE" -eq 0 ]; then
 fi
 
 echo "$OUTPUT" || true
-rm -f "$PID_FILE" 2>/dev/null || true
-mv "$FOLDER" "$DIR/\${ALIAS}_done" 2>/dev/null || true
+rm -f "$PID_FILE" "$DONE/.pid" "$WRAPPER_PID" 2>/dev/null || true
+if [ -d "$PROC" ]; then
+  mv "$PROC" "$DONE" 2>/dev/null || true
+fi
 exit $CODE`
 
 const SCRIPTS_TO_ENSURE: Record<string, string> = {

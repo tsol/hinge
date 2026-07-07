@@ -11,9 +11,7 @@ import { reactAdapter } from './react_adapter'
 import { vueAdapter } from './vue_adapter'
 
 export interface ComponentFrameworkAdapter {
-  /** Short id, e.g. "vue" | "react". */
   readonly id: string
-  /** Source file suffixes for this framework, e.g. [".vue"] or [".tsx", ".jsx"]. */
   readonly fileExtensions: readonly string[]
   resolveFromElement(el: Element | null): {
     component: string | null
@@ -24,7 +22,6 @@ export interface ComponentFrameworkAdapter {
 export interface ComponentResolution {
   component: string | null
   props: Record<string, unknown>
-  /** Which adapter produced the result, e.g. "vue" | "react". */
   framework: string | null
 }
 
@@ -33,10 +30,6 @@ export const COMPONENT_ADAPTERS: ComponentFrameworkAdapter[] = [
   vueAdapter,
   reactAdapter,
 ]
-
-export function registerComponentAdapter(adapter: ComponentFrameworkAdapter): void {
-  COMPONENT_ADAPTERS.push(adapter)
-}
 
 export function resolveComponentFromElement(el: Element | null): ComponentResolution {
   if (!el) {

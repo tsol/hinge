@@ -1,10 +1,21 @@
 # HINGE
 
-**HINGE** — browser-based agent UI for vibecoding, built for people who still want to see the code, think about structure, but do it from their phone in their free time.
+**HINGE** — into a Vite project we inject a small helper, which allows you to pinpoint the
+part of the website you need the agent to alter. It works as a Vite plugin alongside HMR --
+so changes automagically appear on the site while you're on it, surfing and looking for
+the next problem to solve.
 
-Stop context-switching to a terminal. Open HINGE from the browser. Point at UI elements, select files, type instructions, and an LLM agent edits the code. All from the same tab — desktop or mobile.
+And it works right from your phone. I use it with Hermes with a skill that manages my
+projects using Cloudflare dev tunnels - so I get access to my frontend project running
+"pnpm dev" with Hinge injected.
 
-Think of it as vibecoding, but with actual file access, a source code viewer, and enough tactility that you never feel *un-hinged*.
+While Hermes is running in Docker on my laptop, piloted by DeepSeek-v2, I manage my
+projects using Hinge and tunnels -- when I have a free minute I take my phone, find a thing
+to change on my site and just point my agent to fix that.
+
+I can even share the access with my non-tech friend who works on the same site and
+she can leave her messages in the queue or immediately run the task.
+
 
 ---
 
@@ -231,7 +242,6 @@ src/
 │   ├── HingeTabQueue.vue    # Task queue + chat
 │   ├── HingeAttach.vue      # File/component attachment
 │   ├── HingeMic.vue         # Voice recording
-│   ├── NonBlockBtn.vue      # Non-blocking task button
 │   ├── TestBtn.vue          # Test trigger
 │   └── ToastContainer.vue   # Toast notifications
 ├── composables/
@@ -242,9 +252,13 @@ src/
 │   ├── useSelectionStore.ts # UI element selection
 │   ├── useElementHighlights.ts
 │   ├── useCogPosition.ts    # Drag positioning
-│   ├── useQueueSubmit.ts    # Queue submission
-│   ├── useTaskDraft.ts      # Draft management
+│   ├── useModeDropdown.ts   # Shared mode split-button
 │   └── ...
+├── utils/
+│   ├── queueApi.ts          # Queue HTTP helpers
+│   ├── buildComponentBlock.ts
+│   ├── highlightLang.ts
+│   └── portRegistry.ts
 ├── locales/
 │   ├── en.ts                # English strings
 │   └── ru.ts                # Russian strings

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { API_BASE } from '../const'
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 
 const emit = defineEmits<{
   transcribed: [text: string]

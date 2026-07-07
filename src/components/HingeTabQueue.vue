@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import HingeAttach from './HingeAttach.vue'
-import { hydrateDrafts, clearDraft } from '../composables/useTaskDraft'
 import { API_BASE } from '../const'
-import { useToast } from '../composables/useToast'
 import { usePersistedState } from '../composables/usePersistedState'
 import { useI18n } from '../composables/useI18n'
 import { prettifyMessage, escapeHtml } from '../utils/mdToHtml'
@@ -38,6 +36,10 @@ const props = withDefaults(defineProps<{
   editingFile: '',
   execMode: 'execute',
 })
+
+const emit = defineEmits<{
+  'edit-task': [item: { name: string; content: string }]
+}>()
 const { t: lang } = useI18n()
 const items = ref<QueueItem[]>([])
 const loading = ref(false)
@@ -64,6 +66,7 @@ function stem(name: string): string {
 
 // Per-stem: editing state — keyed by stem (no status suffix) so content
 // survives status transitions (_wait→_processing→_done) without migration.
+/** In-memory cache of chat.md per task stem — synced from server, never drafted to localStorage */
 const editingContent = ref<Record<string, string>>({})
 const saving = ref<Record<string, boolean>>({})
 // Per-item: selection for execution (wait tasks only, default checked)
@@ -199,18 +202,44 @@ watch(() => props.execMode, () => {
   initSelected(items.value)
 })
 
-/** Send external text (from HingePanel's input) as a chat message to the expanded accordion */
-async function sendExternalChat(text: string) {
-  const s = expandedStem.value
-  if (!s) return
-  const item = items.value.find(i => stem(i.name) === s)
-  if (!item) return
-  // Set the chat input and use executeSingle (unified flow: PATCH + wait)
-  chatInputs.value = { ...chatInputs.value, [item.name]: text }
-  await executeSingle(item.name)
+defineExpose({ getSelectedTasks, selectionCount })
+
+function shouldUseServerChat(local: string, server: string): boolean {
+  if (!local) return true
+  if (server.includes('**Assistant:**') && !local.includes('**Assistant:**')) return true
+  return server.length > local.length
 }
 
-defineExpose({ getSelectedTasks, stopAll, selectionCount, expandedStem, sendExternalChat })
+/** Sync chat.md from queue/output — textarea drafts live in tabqueueState.chatInputs only */
+async function syncEditingContent(fresh: QueueItem[]) {
+  const updates = { ...editingContent.value }
+
+  for (const item of fresh) {
+    const key = stem(item.name)
+    const finished = item.status === 'done' || item.status === 'error'
+    const awaitingReply = item.status === 'processing'
+      && item.name.endsWith('_done')
+      && !item.content.includes('**Assistant:**')
+    let serverContent = item.content
+
+    if (finished || awaitingReply || serverContent.includes('**Assistant:**')) {
+      try {
+        const chatRes = await fetch(`${API_BASE}/output?file=${encodeURIComponent(item.name)}`)
+        if (chatRes.ok) {
+          const text = await chatRes.text()
+          if (text) serverContent = text
+        }
+      } catch { /* silent */ }
+    }
+
+    const local = updates[key] ?? ''
+    if (finished || awaitingReply || shouldUseServerChat(local, serverContent)) {
+      updates[key] = serverContent
+    }
+  }
+
+  editingContent.value = updates
+}
 
 /** Silent refresh: keeps current loading state, no flicker */
 async function refreshItems() {
@@ -218,26 +247,7 @@ async function refreshItems() {
     const res = await fetch(`${API_BASE}/queue`)
     if (!res.ok) return
     const fresh: QueueItem[] = await res.json()
-    const wasProcessing = new Set(
-      items.value.filter(i => i.status === 'processing').map(i => i.name)
-    )
-    hydrateDrafts(editingContent, fresh.map(i => ({ key: stem(i.name), content: i.content })))
-    for (const item of fresh) {
-      const wasProc = Array.from(wasProcessing).some(n => stem(n) === stem(item.name))
-      if (wasProc && item.status !== 'processing') {
-        clearDraft(stem(item.name))
-        // Fetch actual chat.md from server to get agent response
-        try {
-          const chatRes = await fetch(`${API_BASE}/output?file=${encodeURIComponent(item.name)}`)
-          if (chatRes.ok) {
-            const serverContent = await chatRes.text()
-            if (serverContent) {
-              editingContent.value = { ...editingContent.value, [stem(item.name)]: serverContent }
-            }
-          }
-        } catch { /* silent */ }
-      }
-    }
+    await syncEditingContent(fresh)
     items.value = fresh
     initSelected(fresh)
 
@@ -289,7 +299,7 @@ async function loadItems() {
     const res = await fetch(`${API_BASE}/queue`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const fresh: QueueItem[] = await res.json()
-    hydrateDrafts(editingContent, fresh.map(i => ({ key: stem(i.name), content: i.content })))
+    await syncEditingContent(fresh)
     items.value = fresh
     initSelected(fresh)
     const proc: Record<string, boolean> = {}
@@ -305,10 +315,19 @@ async function loadItems() {
 }
 
 function remove(name: string) {
+  saving.value = { ...saving.value, [name]: true }
   fetch(`${API_BASE}/queue?file=${encodeURIComponent(name)}`, { method: 'DELETE' })
     .then(() => {
       if (expandedStem.value === stem(name)) expandedStem.value = null
+      const s = stem(name)
+      const { [s]: _content, ...restContent } = editingContent.value
+      editingContent.value = restContent
+      const { [s]: _input, ...restInputs } = chatInputs.value
+      chatInputs.value = restInputs
       refreshItems()
+    })
+    .finally(() => {
+      saving.value = { ...saving.value, [name]: false }
     })
 }
 
@@ -367,14 +386,23 @@ function headerSubtitle(content: string): string {
 }
 
 function timeLabel(name: string) {
-  const stem = name.replace(/(_new|_wait|_done|_processing)$/, '')
-  const parts = stem.split('_')
+  const s = stem(name)
+  const parts = s.split('_')
   const ts = parts[0]
-  if (!ts || !ts.includes('T')) return stem
+  if (!ts || !ts.includes('T')) return s
   const timeParts = ts.split('T')
-  if (timeParts.length < 2) return stem
+  if (timeParts.length < 2) return s
   const time = (timeParts[1] || '').replace(/-/g, ':')
-  return time.slice(0, 5) // HH:mm only
+  return time.slice(0, 5)
+}
+
+function editTask(item: QueueItem) {
+  if (item.status !== 'new' && item.status !== 'wait') return
+  const s = stem(item.name)
+  emit('edit-task', {
+    name: item.name,
+    content: editingContent.value[s] || item.content,
+  })
 }
 
 // ── Auto-refresh (every 2s while component is mounted) ──
@@ -420,15 +448,15 @@ function scrollChatToBottom() {
 
 /** Send a new chat message */
 async function sendChat(name: string) {
-  const message = chatInputs.value[name]?.trim()
+  const s = stem(name)
+  const message = chatInputs.value[s]?.trim()
   if (!message || processingTask.value[name]) return
 
   // Optimistically add user message to displayed history
-  const s = stem(name)
   const currentContent = editingContent.value[s] || ''
   const updatedContent = currentContent + `\n\n---\n\n**User:**\n${message}\n`
   editingContent.value = { ...editingContent.value, [s]: updatedContent }
-  chatInputs.value = { ...chatInputs.value, [name]: '' }
+  chatInputs.value = { ...chatInputs.value, [s]: '' }
 
   // Send via chat endpoint (handles rename + agent internally)
   const res = await fetch(`${API_BASE}/chat/send`, {
@@ -477,10 +505,10 @@ async function stopAll() {
 /** Set task to wait state (▶ button) — enqueue + save chat text if present */
 async function executeSingle(name: string) {
   if (processingTask.value[name]) return
-  const message = chatInputs.value[name]?.trim()
+  const s = stem(name)
+  const message = chatInputs.value[s]?.trim()
   if (message) {
     // Append message to chat content via PATCH first
-    const s = stem(name)
     const currentContent = editingContent.value[s] || ''
     const updatedContent = currentContent ? currentContent + `\n\n---\n\n**User:**\n${message}\n` : `**User:**\n${message}\n`
     await fetch(`${API_BASE}/queue`, {
@@ -489,7 +517,7 @@ async function executeSingle(name: string) {
       body: JSON.stringify({ file: name, content: updatedContent }),
     })
     editingContent.value = { ...editingContent.value, [s]: updatedContent }
-    chatInputs.value = { ...chatInputs.value, [name]: '' }
+    chatInputs.value = { ...chatInputs.value, [s]: '' }
   }
   // Set status to wait (server won't auto-start — guarded by status !== 'wait')
   await fetch(`${API_BASE}/queue`, {
@@ -500,8 +528,6 @@ async function executeSingle(name: string) {
   refreshItems()
   nextTick(() => scrollChatToBottom())
 }
-
-/** Cancel a running task (kill agent, revert to wait) */
 </script>
 
 <template>
@@ -574,7 +600,7 @@ async function executeSingle(name: string) {
               <textarea
                 class="chat-input"
                 :placeholder="processingTask[item.name] ? lang.waitingResponse : lang.messageAgent"
-                v-model="chatInputs[item.name]"
+                v-model="chatInputs[stem(item.name)]"
                 :disabled="processingTask[item.name]"
                 @keydown.enter.ctrl="sendChat(item.name)"
                 rows="2"
@@ -593,6 +619,13 @@ async function executeSingle(name: string) {
             >{{ lang.stopTask }}</button>
           </div>
           <div v-else class="qr-card__save-row">
+            <button
+              v-if="item.status === 'new' || item.status === 'wait'"
+              class="qr-btn qr-btn--edit"
+              :disabled="saving[item.name]"
+              @click.stop="editTask(item)"
+              :title="lang.saveEdit"
+            >✎</button>
             <button class="qr-btn qr-btn--delete" :disabled="saving[item.name]" @click.stop="remove(item.name)" :title="lang.delete">✕</button>
             <HingeAttach :folder="item.name" />
             <span class="qr-card__save-spacer"></span>
@@ -753,27 +786,27 @@ async function executeSingle(name: string) {
   font-family: ui-monospace, monospace;
   flex-shrink: 0;
 }
-.qr-card__stop-btn {
-  background: transparent;
-  color: #ff6b6b;
-  border: 1px solid #ff6b6b;
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: var(--hinge-fs-13, 13px);
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s, opacity 0.12s;
-}
-.qr-card__stop-btn:hover {
-  background: rgba(255, 107, 107, 0.15);
-}
 .qr-card__chevron {
   font-size: var(--hinge-fs-9, 9px);
   color: #888;
   flex-shrink: 0;
   width: 14px;
   text-align: center;
+}
+.qr-card__select {
+  width: 18px;
+  text-align: center;
+  font-size: var(--hinge-fs-14, 14px);
+  flex-shrink: 0;
+  cursor: pointer;
+  color: #555;
+  transition: color 0.12s;
+}
+.qr-card__select:hover {
+  color: #58a6ff;
+}
+.qr-card__select--on {
+  color: #58a6ff;
 }
 .qr-card__body {
   padding: 0 var(--hinge-spacing-sm, 10px) var(--hinge-spacing-sm, 6px);
@@ -869,26 +902,6 @@ async function executeSingle(name: string) {
   opacity: 0.5;
 }
 
-.qr-card__editor {
-  width: 100%;
-  min-height: 120px;
-  padding: 10px;
-  background: #0d1117;
-  color: #c9d1d9;
-  border: 1px solid #2a2a4a;
-  border-radius: 4px;
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: var(--hinge-fs-11, 11px);
-  line-height: 1.5;
-  resize: vertical;
-  box-sizing: border-box;
-}
-.qr-card__editor:focus {
-  outline: none;
-  border-color: #58a6ff;
-}
-
-/* Agent output */
 .qr-card__save-row {
   display: flex;
   justify-content: space-between;
@@ -909,6 +922,7 @@ async function executeSingle(name: string) {
 }
 .qr-btn:hover { opacity: 0.8; }
 .qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.qr-btn--edit { background: transparent; color: #58a6ff; border: 1px solid #58a6ff; padding: 5px 10px; }
 .qr-btn--delete { background: transparent; color: #f85149; border: 1px solid #f85149; }
 .qr-btn--run { background: #238636; color: #fff; padding: 5px 12px; }
 .qr-btn--stop {
@@ -926,83 +940,6 @@ async function executeSingle(name: string) {
 }
 .qr-btn--stop:hover {
   background: rgba(255, 107, 107, 0.15);
-}
-
-/* Agent output */
-.qr-card__select {
-  width: 18px;
-  text-align: center;
-  font-size: var(--hinge-fs-14, 14px);
-  flex-shrink: 0;
-  cursor: pointer;
-  color: #555;
-  transition: color 0.12s;
-}
-.qr-card__select:hover {
-  color: #58a6ff;
-}
-.qr-card__select--on {
-  color: #58a6ff;
-}
-
-.qr-card__output {
-  border-top: 1px solid #1f6feb33;
-  padding-top: var(--hinge-spacing-md, 8px);
-}
-.qr-card__output-header {
-  font-size: var(--hinge-fs-10, 10px);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #58a6ff;
-  margin-bottom: var(--hinge-spacing-sm, 6px);
-}
-.qr-card__output-text {
-  margin: 0;
-  padding: var(--hinge-spacing-md, 8px) var(--hinge-spacing-sm, 10px);
-  background: #0d1117;
-  border: 1px solid #2a2a4a;
-  border-radius: 4px;
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: var(--hinge-fs-11, 11px);
-  line-height: 1.5;
-  color: #c9d1d9;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: calc(120px * var(--hinge-scale, 1));
-  overflow-y: auto;
-}
-.qr-card__output-text--live {
-  border-color: #da3633;
-  max-height: calc(190px * var(--hinge-scale, 1));
-}
-.qr-card__output-loading {
-  font-size: var(--hinge-fs-11, 11px);
-  color: #666;
-  font-style: italic;
-  padding: 6px 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.qr-card__output-spinner {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid #da3633;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: qr-spin 0.8s linear infinite;
-}
-@keyframes qr-spin {
-  to { transform: rotate(360deg); }
-}
-.qr-card__output-empty {
-  font-size: var(--hinge-fs-11, 11px);
-  color: #666;
-  font-style: italic;
-  margin: 0;
-  padding: 6px 0;
 }
 
 .qr-card__processing-bar {

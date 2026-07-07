@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { API_BASE } from '../const'
-import { ref, computed, onMounted, onUnmounted, nextTick, toRef } from 'vue'
-import type { HingeTarget } from '../types/target'
-import type { TaskModel } from '../composables/useTaskModel'
+import { ref, computed, onMounted, onUnmounted, toRef } from 'vue'
+import { DRAG_THRESHOLD } from '../constants'
 import { useCogModalPosition } from '../composables/useCogModalPosition'
 import { usePersistedState } from '../composables/usePersistedState'
 import { useI18n } from '../composables/useI18n'
+import { useModeDropdown } from '../composables/useModeDropdown'
+import { setHighlightEntry } from '../composables/useElementHighlights'
+import { buildComponentBlock, buildQueueContent } from '../utils/buildComponentBlock'
+import { postQueueContent, runNewestQueuedItem } from '../utils/queueApi'
 import HingeMic from './HingeMic.vue'
 
-// ── Drag-vs-click guard ──
 const didDrag = ref(false)
 const dragStart = { x: 0, y: 0 }
-const DRAG_THRESHOLD = 6
 
 function onIconPointerDown(e: PointerEvent) {
   didDrag.value = false
@@ -35,17 +35,13 @@ function onIconClick() {
 }
 
 const props = defineProps<{
-  open: boolean
   cogStyle: Record<string, string>
   positionX: number
   positionY: number
   alwaysOnTop: boolean
   currentLabel: string
   candidateLabels: string[]
-  candidates: Element[]
-  target: HingeTarget
   selectedElement: Element | null
-  model: TaskModel
   queueCount: number
 }>()
 
@@ -57,29 +53,23 @@ defineEmits<{
   'cycle-target': []
 }>()
 
-// ── Modal positioning (independent smooth-follow composable) ──
 const { modalOpen, modalStyle, toggleModal, closeModal } = useCogModalPosition(
   toRef(props, 'positionX'),
   toRef(props, 'positionY'),
 )
 
-// ── Task text ──
-const { state: cogText } = usePersistedState('cogText', {
-  text: '',
-})
+const { state: cogText } = usePersistedState('cogText', { text: '' })
 const taskText = toRef(cogText, 'text')
 
-// ── Mode split-button (dropdown, like HingePanel group ops) ──
 const { t: lang } = useI18n()
-
-const showModeDropdown = ref(false)
-
-function onTranscribed(text: string) {
-  taskText.value = (taskText.value ? taskText.value + '\n' : '') + text + '\n'
-}
-
-const modeDropdownUp = ref(false)
 const chevronRef = ref<HTMLElement | null>(null)
+const {
+  open: showModeDropdown,
+  opensUpward: modeDropdownUp,
+  toggle: toggleModeDropdown,
+  close: closeModeDropdown,
+  onOutsideClick: onModeOutsideClick,
+} = useModeDropdown(chevronRef, 2, 34, 90)
 
 const { state: cogExec } = usePersistedState('cogExecMode', {
   mode: 'run' as 'queue' | 'run',
@@ -89,116 +79,39 @@ const cogExecMode = computed({
   set: (v: 'queue' | 'run') => { cogExec.mode = v },
 })
 
-function toggleModeDropdown() {
-  showModeDropdown.value = !showModeDropdown.value
-  if (showModeDropdown.value) {
-    // Check if dropdown fits below
-    nextTick(() => {
-      const el = chevronRef.value
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const dropH = 90 // approx 2 items
-      modeDropdownUp.value = rect.bottom + 4 + dropH > window.innerHeight
-    })
-  }
+function onTranscribed(text: string) {
+  taskText.value = (taskText.value ? taskText.value + '\n' : '') + text + '\n'
 }
 
 function setMode(mode: 'queue' | 'run') {
   cogExecMode.value = mode
-  showModeDropdown.value = false
+  closeModeDropdown()
 }
 
-// Close dropdown on outside click
-function onDocCogClick(e: MouseEvent) {
-  const target = e.target as HTMLElement
-  if (!target.closest('.cog-mode-btn')) {
-    showModeDropdown.value = false
-  }
-}
-
-// ── Add action ──
 async function onAdd() {
   if (!taskText.value.trim() && props.candidateLabels.length === 0) return
 
-  // Build content: component header + text
-  let content = ''
-  if (props.candidateLabels.length > 0) {
-    const label = props.currentLabel
-    const el = props.selectedElement
-    const fields: Record<string, string> = {}
-    // Save page URL
-    const url = window.location.pathname + window.location.search
-    if (url) fields.Url = url
-    // Extract component props & computed styles
-    if (el) {
-      const { resolveComponentFromElement, formatPropsInline } = await import('../utils/componentTarget')
-      const { generateCSSSelector } = await import('../utils/cssSelector')
-      const resolved = resolveComponentFromElement(el)
-      if (!resolved.component?.startsWith('Hinge')) {
-        const propsStr = formatPropsInline(resolved.props, 6)
-        if (propsStr) fields.Props = propsStr
-      }
-      const cs = el instanceof HTMLElement ? getComputedStyle(el) : null
-      if (cs) {
-        const relevant = ['display','position','flex-direction','align-items','justify-content',
-          'gap','padding','margin','font-size','font-weight','color',
-          'background','background-color','border-radius','border',
-          'width','height','min-width','min-height','opacity','overflow','text-align','white-space']
-        const styleStr = relevant.map(k => `${k}=${cs.getPropertyValue(k)}`).filter(([,v]) => v && v !== 'none' && v !== 'auto' && v !== 'normal').join(' ')
-        if (styleStr) fields.Styling = styleStr
-      }
-      // Generate unique CSS selector
-      const selector = generateCSSSelector(el)
-      if (selector) fields.Selector = selector
-    }
-    content = `### Component: ${label}`
-    if (Object.keys(fields).length > 0) {
-      content += '\n' + Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join('\n')
-    }
-  }
-  const text = taskText.value.trim()
-  if (text) {
-    content += (content ? '\n\n' : '') + text
+  const componentBlock = props.candidateLabels.length > 0
+    ? buildComponentBlock(props.currentLabel, props.selectedElement)
+    : ''
+
+  if (props.selectedElement && props.currentLabel) {
+    setHighlightEntry(props.currentLabel, props.selectedElement)
   }
 
+  const content = buildQueueContent(componentBlock, taskText.value)
   if (!content.trim()) return
 
-  // POST to queue
-  await fetch(`${API_BASE}/queue`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  })
-  // Extract folder name from response if available
-  let folderName = ''
+  await postQueueContent(content)
 
-  // Run mode: enqueue + trigger execution
   if (cogExecMode.value === 'run') {
-    // Find the just-created folder (newest _new)
-    const res = await fetch(`${API_BASE}/queue`)
-    if (res.ok) {
-      const items: { name: string; status: string }[] = await res.json()
-      const newItem = items.find(i => i.status === 'new')
-      if (newItem) {
-        folderName = newItem.name
-        // Transition to wait, server auto-starts if idle
-        await fetch(`${API_BASE}/queue`, {
-            method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file: folderName, status: 'wait' }),
-        })
-        // Trigger immediate execution
-        await fetch(`${API_BASE}/queue/run`, { method: 'POST' })
-      }
-    }
+    await runNewestQueuedItem()
   }
 
-  // Reset
   taskText.value = ''
   modalOpen.value = false
 }
 
-// ── Close on click outside ──
 function onDocumentClick(e: MouseEvent) {
   if (!modalOpen.value) return
   const target = e.target as Node
@@ -207,6 +120,10 @@ function onDocumentClick(e: MouseEvent) {
   if (wrap && modal && !wrap.contains(target) && !modal.contains(target)) {
     closeModal()
   }
+}
+
+function onDocCogClick(e: MouseEvent) {
+  onModeOutsideClick(e, '.cog-mode-btn')
 }
 
 onMounted(() => {
@@ -226,7 +143,6 @@ const wrapStyle = computed(() => ({
 
 <template>
   <Teleport to="body">
-    <!-- Gear icon (positioned by cogStyle translate3d) -->
     <div class="cog-wrap" :style="wrapStyle">
       <div
         class="cog-icon"
@@ -237,20 +153,11 @@ const wrapStyle = computed(() => ({
         @pointercancel="$emit('pointercancel', $event)"
         @click.stop="onIconClick"
       >⚙️
-        <span
-          v-if="queueCount > 0"
-          class="cog-badge"
-        >{{ queueCount > 99 ? '99+' : queueCount }}</span>
+        <span v-if="queueCount > 0" class="cog-badge">{{ queueCount > 99 ? '99+' : queueCount }}</span>
       </div>
     </div>
 
-    <!-- Modal (sibling, position: fixed → viewport coords independent of cog-wrap) -->
-    <div
-      v-if="modalOpen"
-      class="cog-modal"
-      :style="modalStyle"
-      @click.stop
-    >
+    <div v-if="modalOpen" class="cog-modal" :style="modalStyle" @click.stop>
       <textarea
         class="cog-modal__ta"
         data-hinge-field="cog"
@@ -345,7 +252,6 @@ const wrapStyle = computed(() => ({
   filter: drop-shadow(0 0 4px rgba(0, 123, 255, 0.6)) !important;
 }
 
-/* ── Queue badge ── */
 .cog-badge {
   position: absolute !important;
   top: -2px !important;
@@ -363,7 +269,6 @@ const wrapStyle = computed(() => ({
   pointer-events: none !important;
 }
 
-/* ── Modal ── */
 .cog-modal {
   position: fixed !important;
   pointer-events: auto !important;
@@ -397,7 +302,6 @@ const wrapStyle = computed(() => ({
   border-color: #238636 !important;
 }
 
-/* ── Split-button mode selector (dropdown, like HingePanel group ops) ── */
 .cog-modal__actions {
   display: flex !important;
   align-items: center !important;
@@ -459,7 +363,6 @@ const wrapStyle = computed(() => ({
   color: #fff !important;
 }
 
-/* ── Mode Dropdown ── */
 .cog-mode-dropdown {
   position: absolute !important;
   top: 100% !important;
@@ -502,7 +405,6 @@ const wrapStyle = computed(() => ({
   background: rgba(88, 166, 255, 0.08) !important;
 }
 
-/* ── Circular selector ── */
 .cog-modal__selector {
   display: flex !important;
 }

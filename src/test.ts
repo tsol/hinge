@@ -44,18 +44,3 @@ export function runTest(onProgress?: TestCallback): Promise<string> {
     return `Тест #${id} завершён за ${Math.round(performance.now() - start)}ms`
   })()
 }
-
-/**
- * Run multiple concurrent tests.
- * Returns a promise that resolves when all complete.
- */
-export function runSuite(
-  count: number,
-  onProgress?: TestCallback,
-): Promise<string[]> {
-  const runners: Promise<string>[] = []
-  for (let i = 0; i < count; i++) {
-    runners.push(runTest(onProgress))
-  }
-  return Promise.all(runners)
-}

@@ -3,14 +3,9 @@ import { reactive, watch, toRaw } from 'vue'
 const STORAGE_PREFIX = 'hinge:'
 
 export interface PersistedState<T extends Record<string, unknown>> {
-  /** Reactive state proxy — mutate fields directly, auto-saves debounced */
   state: T
-  /** Reset all fields to defaults and remove from localStorage */
   clear(): void
-  /** Force immediate save (skip debounce) */
   saveNow(): void
-  /** Enable/disable persistence on the fly */
-  enabled: boolean
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -46,11 +41,8 @@ export function usePersistedState<T extends Record<string, unknown>>(
   }
 
   const state = reactive<T>(initial) as T
-  let _enabled = true
 
-  // ── Debounced save ──
   function scheduleSave() {
-    if (!_enabled) return
     const existing = timers.get(storageKey)
     if (existing) clearTimeout(existing)
     timers.set(storageKey, setTimeout(() => {
@@ -78,20 +70,6 @@ export function usePersistedState<T extends Record<string, unknown>>(
     try { localStorage.setItem(storageKey, JSON.stringify(toRaw(state))) } catch { /* ignore */ }
   }
 
-  return { state, clear, saveNow, enabled: _enabled }
+  return { state, clear, saveNow }
 }
 
-/**
- * Clear ALL hinge-persisted keys from localStorage.
- * Useful for debug or a "reset everything" button.
- */
-export function clearAllPersistedState(): void {
-  const toRemove: string[] = []
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i)
-    if (k?.startsWith(STORAGE_PREFIX)) toRemove.push(k)
-  }
-  for (const k of toRemove) localStorage.removeItem(k)
-  // Cancel any pending save timers
-  for (const [k, t] of timers) { clearTimeout(t); timers.delete(k) }
-}

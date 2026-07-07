@@ -243,11 +243,6 @@ export function mdToHtml(text: string): string {
   return sanitize(out.join('\n'))
 }
 
-// ── Backward-compat re-export ──
-
-/** @deprecated Use `mdToHtml` instead. */
-export const prettifyResponse = mdToHtml
-
 /**
  * Full pipeline: strip verbose tool-call output (diffs, ┊ blocks),
  * then render remaining text as markdown → safe HTML.

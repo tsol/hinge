@@ -8,17 +8,13 @@
       />
 
       <HingeCog
-        :open="isOpen"
         :cog-style="cogStyle"
         :position-x="position.x"
         :position-y="position.y"
         :always-on-top="alwaysOnTop"
         :current-label="currentLabel"
         :candidate-labels="candidateLabels"
-        :candidates="candidates"
-        :target="target"
         :selected-element="selectedElement"
-        :model="model"
         :queue-count="queueCount"
         @pointerdown="onCogPointerDown"
         @pointermove="onCogPointerMove"
@@ -55,6 +51,7 @@ import { useToast } from './composables/useToast'
 import { usePersistedState } from './composables/usePersistedState'
 import { useFontScale } from './composables/useFontScale'
 import { prettifyMessage } from './utils/mdToHtml'
+import { postQueueContent } from './utils/queueApi'
 import { API_BASE } from './const'
 
 const alwaysOnTop = ref(false)
@@ -109,10 +106,8 @@ const {
 })
 
 const {
-  target,
   selectedElement,
   candidateLabels,
-  candidates,
   currentLabel,
   cycleTarget,
 } = useTargetComponent(position)
@@ -123,11 +118,7 @@ const note = model.text
 async function handleSend(onSuccess?: () => void) {
   const serialized = model.serialize()
   if (!serialized.trim()) return
-  await fetch(`${API_BASE}/queue`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: serialized }),
-  })
+  await postQueueContent(serialized)
   model.text.value = ''
   model.attachments.value = []
   onSuccess?.()
@@ -138,7 +129,10 @@ useFontScale()
 
 // ── Queue polling (badge + toast on completion) ──
 const queueCount = ref(0)
-let prevProcessing = new Set<string>()
+/** Previous status per task stem — detects wait/processing → done even if poll skips _processing */
+let prevStatusByStem = new Map<string, string>()
+/** Toast when **Assistant:** arrives after premature _done (recovery race) */
+const pendingToasts = new Map<string, { query: string; itemName: string }>()
 let pollTimer: ReturnType<typeof setInterval> | null = null
 const { toasts: _t, success, error } = useToast()
 
@@ -147,6 +141,19 @@ function firstWords(note: string, maxLen = 60): string {
   const oneLine = note.replace(/\s+/g, ' ').trim()
   if (oneLine.length <= maxLen) return oneLine
   return oneLine.slice(0, maxLen).trimEnd() + '…'
+}
+
+async function fetchAssistantDetail(itemName: string): Promise<string> {
+  try {
+    const chatRes = await fetch(`${API_BASE}/output?file=${encodeURIComponent(itemName)}`)
+    if (!chatRes.ok) return ''
+    const text = await chatRes.text()
+    const lastIdx = text.lastIndexOf('**Assistant:**')
+    if (lastIdx === -1) return ''
+    return prettifyMessage(text.slice(lastIdx + '**Assistant:**'.length))
+  } catch {
+    return ''
+  }
 }
 
 async function pollQueue() {
@@ -159,35 +166,42 @@ async function pollQueue() {
     const active = items.filter(i => i.status === 'processing' || i.status === 'wait')
     queueCount.value = active.length
 
-    // Detect task completions
+    // Retry toasts queued while _done had no **Assistant:** yet
+    for (const [stem, pending] of [...pendingToasts]) {
+      const item = items.find(i => i.name.replace(/_(new|wait|done|processing)$/, '') === stem)
+      if (!item) {
+        pendingToasts.delete(stem)
+        continue
+      }
+      const detail = await fetchAssistantDetail(item.name)
+      if (detail) {
+        success(`✅ ${pending.query}`, detail)
+        pendingToasts.delete(stem)
+      }
+    }
+
+    // Detect task completions (wait/processing → done/error; skip first poll per stem)
     for (const item of items) {
       const stem = item.name.replace(/_(new|wait|done|processing)$/, '')
-      if (prevProcessing.has(stem) && (item.status === 'done' || item.status === 'error')) {
+      const prev = prevStatusByStem.get(stem)
+      const finished = item.status === 'done' || item.status === 'error'
+      if (prev && prev !== item.status && finished) {
         const query = firstWords(item.note || stem)
         if (item.failed || item.status === 'error') {
           error(`❌ ${query}`)
         } else {
-          // Fetch last agent response from chat output
-          let detail = ''
-          try {
-            const chatRes = await fetch(`${API_BASE}/output?file=${encodeURIComponent(item.name)}`)
-            if (chatRes.ok) {
-              const text = await chatRes.text()
-              // Extract last **Assistant:** section
-              const lastIdx = text.lastIndexOf('**Assistant:**')
-              if (lastIdx !== -1) {
-                detail = prettifyMessage(text.slice(lastIdx + '**Assistant:**'.length))
-              }
-            }
-          } catch { /* silent */ }
-          success(`✅ ${query}`, detail)
+          const detail = await fetchAssistantDetail(item.name)
+          if (detail) {
+            success(`✅ ${query}`, detail)
+          } else {
+            pendingToasts.set(stem, { query, itemName: item.name })
+          }
         }
       }
     }
 
-    // Track current processing stems
-    prevProcessing = new Set(
-      items.filter(i => i.status === 'processing').map(i => i.name.replace(/_(new|wait|done|processing)$/, ''))
+    prevStatusByStem = new Map(
+      items.map(i => [i.name.replace(/_(new|wait|done|processing)$/, ''), i.status]),
     )
   } catch { /* silent */ }
 }

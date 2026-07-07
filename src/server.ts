@@ -23,9 +23,10 @@ import {
   recoverAndSchedule,
   syncRunningTasksFromDisk,
   getAgentStatus,
+  inspectWrapperByAlias,
   isTaskRunning,
   clearTaskFromQueue,
-  readWrapperPid,
+  inspectWrapper,
   getRunningTaskNames,
   hasRunningTasks,
 } from './agentRunner'
@@ -41,13 +42,11 @@ import {
   isValidQueueStatus,
   safeBasename,
 } from './utils/pathSafety'
+import { apiServerGlobalKey } from './utils/portRegistry'
 
 // ── Shared state → agentRunner.ts (persistent across HMR) ──
-// Key includes port so each project has its OWN server — projects don't share
-const GLOBAL_KEY_PREFIX = '__hinge_api_server_'
-
 function globalKey(port: number): string {
-  return GLOBAL_KEY_PREFIX + port
+  return apiServerGlobalKey(port)
 }
 
 function getApiServer(port: number): http.Server | null {
@@ -96,17 +95,6 @@ export function stopHingeServer(port = 5177): void {
     setApiServer(port, null)
   }
 }
-
-/** First port in range with a registered hinge API server (survives HMR). */
-export function findRegisteredApiPort(start = 5177, end = 5197): number | null {
-  for (let p = start; p <= end; p++) {
-    if (getApiServer(p)) return p
-  }
-  return null
-}
-
-/** Ping /status to see if a hinge API server is already listening. */
-export { probeHingeApi } from './probeApi'
 
 // ── Request router ────────────────────────────────────────
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
@@ -405,6 +393,21 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
+  // ── Wrapper liveness (same probe as queue agentStatus / recovery) ──
+  if (pathname === `${API_BASE}/wrapper`) {
+    if (method !== 'GET') { status(res, 405, 'GET only'); return }
+    const folder = url.searchParams.get('folder')
+    if (!folder) { json(res, { error: 'missing folder' }, 400); return }
+    const folderPath = resolveQueueFolderExisting(folder)
+    if (folderPath) {
+      json(res, inspectWrapper(folderPath, folder))
+      return
+    }
+    const alias = folder.replace(/_(new|wait|done|processing)$/, '')
+    json(res, inspectWrapperByAlias(alias))
+    return
+  }
+
   // ── Status ──
   if (pathname === `${API_BASE}/status`) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
@@ -447,8 +450,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
 
       if (foundName.endsWith('_processing')) {
         clearTaskFromQueue(foundName)
-        const pid = readWrapperPid(folderPath)
-        if (pid && pid > 0) {
+        const { liveness, pid } = inspectWrapper(folderPath, foundName)
+        if (liveness === 'running' && pid) {
           try { process.kill(pid, 'SIGTERM') } catch { /* ignore */ }
         }
         try { unlinkSync(resolve(folderPath, '.pid')) } catch { /* ignore */ }
@@ -687,8 +690,17 @@ function listQueue(): QueueItem[] {
     // Detect failed tasks
     const errorPath = resolveQueueFolder(name, '.error')
     const failed = errorPath ? existsSync(errorPath) : false
-    const displayStatus: QueueItem['status'] = failed ? 'error' : status
-    const agentStatus = status === 'processing' ? getAgentStatus(name) : null
+    const alias = name.replace(/_(new|wait|done|processing)$/, '')
+    let displayStatus: QueueItem['status'] = failed ? 'error' : status
+    let agentStatus = status === 'processing' ? getAgentStatus(name) : null
+    // Recovery can rename _processing → _done before wrapper writes **Assistant:**
+    if (displayStatus === 'done' && !content.includes('**Assistant:**')) {
+      const live = inspectWrapperByAlias(alias)
+      if (live.liveness === 'running') {
+        displayStatus = 'processing'
+        agentStatus = { status: live.liveness, pid: live.pid, elapsed: live.elapsed }
+      }
+    }
     items.push({ name, status: displayStatus, content: content || '', component, note, url, dom, failed, agentStatus } as QueueItem)
   }
   items.sort((a, b) => b.name.localeCompare(a.name))

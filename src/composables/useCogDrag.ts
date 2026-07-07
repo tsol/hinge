@@ -1,4 +1,4 @@
-import { reactive, ref, type Reactive } from 'vue'
+import { reactive, type Reactive } from 'vue'
 import { DRAG_THRESHOLD } from '../constants'
 import type { CogPosition } from './useCogPosition'
 
@@ -11,7 +11,6 @@ export function useCogDrag({
   position,
   clampPosition,
 }: UseCogDragOptions) {
-  const isDragMoved = ref(false)
   const dragState = reactive({
     active: false,
     moved: false,
@@ -27,7 +26,6 @@ export function useCogDrag({
 
     dragState.active = true
     dragState.moved = false
-    isDragMoved.value = false
     dragState.startX = e.clientX
     dragState.startY = e.clientY
     dragState.offsetX = e.clientX - position.x
@@ -44,7 +42,6 @@ export function useCogDrag({
     if (!dragState.moved) {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return
       dragState.moved = true
-      isDragMoved.value = true
     }
 
     position.x = e.clientX - dragState.offsetX
@@ -63,15 +60,9 @@ export function useCogDrag({
     }
   }
 
-  function resetDragMoved() {
-    isDragMoved.value = false
-  }
-
   return {
     onCogPointerDown,
     onCogPointerMove,
     onCogPointerUp,
-    isDragMoved,
-    resetDragMoved,
   }
 }

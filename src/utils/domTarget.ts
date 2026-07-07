@@ -262,17 +262,3 @@ export function getCycleableTargetsAtPoint(
   return result
 }
 
-export function resolveTargetLabelAtPoint(
-  x: number,
-  y: number,
-  cogSize: number,
-): string {
-  const elements = getElementsAtPoint(x, y, cogSize)
-  const hit = pickBestDomElement(elements)
-
-  if (!hit) {
-    return getRouteComponentName() ?? 'unknown'
-  }
-
-  return describeElement(hit)
-}

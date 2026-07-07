@@ -78,8 +78,7 @@ export function setGearTargetHighlight(el: Element | null) {
   }
 }
 
-/** Re-apply attachment highlights from the stored map. */
-export function refreshHighlights() {
+function refreshHighlights() {
   clearAllAttachmentHighlights()
   for (const el of componentElementMap.values()) {
     if (document.body.contains(el)) {
@@ -92,26 +91,31 @@ export function setHighlightEntry(name: string, el: Element) {
   componentElementMap.set(name, el)
 }
 
-export function getAllHighlightEntries(): [string, Element][] {
-  return Array.from(componentElementMap.entries())
-}
-
-export function clearAllComponentHighlights() {
-  componentElementMap.clear()
-  clearAllAttachmentHighlights()
-}
-
 /**
  * Sync attachment highlights with active component names from the task model.
- * Entries not in the active set are removed.
+ * Resolves DOM via `Selector` field when present.
  */
-export function syncHighlights(activeNames: string[]) {
-  const active = new Set(activeNames)
+export function syncAttachmentHighlights(
+  attachments: Array<{ type: string; name: string; fields?: Record<string, string> }>,
+) {
+  const components = attachments.filter(a => a.type === 'component')
+  const active = new Set(components.map(a => a.name))
+
   for (const [name, el] of componentElementMap) {
     if (!active.has(name)) {
       clearAttachmentHighlight(el)
       componentElementMap.delete(name)
     }
   }
+
+  for (const a of components) {
+    const sel = a.fields?.Selector
+    if (!sel) continue
+    try {
+      const el = document.querySelector(sel)
+      if (el) componentElementMap.set(a.name, el)
+    } catch { /* invalid selector */ }
+  }
+
   refreshHighlights()
 }

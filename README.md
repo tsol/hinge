@@ -5,9 +5,9 @@ part of the website you need the agent to alter. It works as a Vite plugin along
 so changes automagically appear on the site while you're on it, surfing and looking for
 the next problem to solve.
 
-And it works right from your phone. I use it with Hermes with a skill that manages my
-projects using Cloudflare dev tunnels - so I get access to my frontend project running
-"pnpm dev" with Hinge injected.
+And it works right from your phone. I use it with Hermes and the **hinge-projects** skill
+(`project.sh` + Cloudflare dev tunnels) — so I get access to my frontend project running
+with Hinge injected.
 
 While Hermes is running in Docker on my laptop, piloted by DeepSeek-v2, I manage my
 projects using Hinge and tunnels -- when I have a free minute I take my phone, find a thing
@@ -282,20 +282,22 @@ server, integration tests). Normal consumer setup uses **middleware only** — y
 | Command | Description |
 |---------|-------------|
 | `pnpm dev` | Start dev server (default :5174) with API at `/hinge-api` on the same port |
+| `pnpm build` | Typecheck + build to `dist/` |
+| `pnpm preview` | Preview production build |
 
 ### Process management (Hermes / project.sh)
 
-Production workflow uses [`../project.sh`](../project.sh) — not raw `pnpm dev`:
+Production workflow uses [`../project.sh`](../project.sh) — not raw `pnpm dev`.
+See [`../hinge-projects-skill/SKILL.md`](../hinge-projects-skill/SKILL.md) for the full agent skill.
 
 ```bash
-/opt/data/workspace/project.sh hinge restart
-/opt/data/workspace/project.sh hinge status   # shows Hinge API: ok|fail
+# from the directory containing project.sh:
+./project.sh hinge restart
+./project.sh hinge status       # shows Hinge API: ok|fail
 ```
 
 `project.sh` assigns a stable port, starts cloudflared tunnel, kills orphan Vite on restart,
 and verifies `/hinge-api/status` returns JSON after start.
-| `pnpm build` | Typecheck + build to `dist/` |
-| `pnpm preview` | Preview production build |
 
 ---
 

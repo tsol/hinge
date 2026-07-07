@@ -5,6 +5,8 @@ part of the website you need the agent to alter. It works as a Vite plugin along
 so changes automagically appear on the site while you're on it, surfing and looking for
 the next problem to solve.
 
+[![Hinge Demo](https://img.youtube.com/vi/xMvQxht2xuI/maxresdefault.jpg)](https://youtube.com/shorts/xMvQxht2xuI)
+
 And it works right from your phone. I use it with Hermes and the **hinge-projects** skill
 (`project.sh` + Cloudflare dev tunnels) — so I get access to my frontend project running
 with Hinge injected.

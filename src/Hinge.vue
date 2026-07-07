@@ -3,6 +3,7 @@
     <div id="hinge-app">
       <HingeMenuToggle
         :menu-open="isOpen"
+        :panel-width="drawerWidth"
         :badge-count="queueCount"
         @toggle="isOpen = !isOpen"
       />
@@ -64,6 +65,8 @@ const { state: ui } = usePersistedState('ui', {
   isOpen: false,
   focusedField: '',
 })
+const { state: drawerW } = usePersistedState('drawerWidth', { width: 380 })
+const drawerWidth = computed(() => drawerW.width as number)
 const isOpen = computed({
   get: () => ui.isOpen as boolean,
   set: (v: boolean) => { ui.isOpen = v },

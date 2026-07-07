@@ -242,6 +242,21 @@ const wrapStyle = computed(() => ({
   -webkit-user-select: none !important;
   border-radius: 50% !important;
   transition: background 0.2s, box-shadow 0.2s, filter 0.2s !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3) !important;
+}
+
+.cog-icon::after {
+  content: '' !important;
+  position: absolute !important;
+  left: 50% !important;
+  bottom: 0 !important;
+  transform: translate(-50%, 45%) !important;
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 50% !important;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0) 72%) !important;
+  z-index: -1 !important;
+  pointer-events: none !important;
 }
 
 .cog-icon:active {

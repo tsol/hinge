@@ -51,7 +51,7 @@ const emit = defineEmits<{
 
 const { t: lang, setLocale, currentLocale } = useI18n()
 
-const { selection, fromFile } = useSelectionStore()
+const { selection, fromFile, restoreFilePath } = useSelectionStore()
 
 const note = computed({
   get: () => props.modelValue,
@@ -472,10 +472,11 @@ watch(() => selection.filePath, (fp) => {
   if (fp) panel.lastFile = fp
 })
 
-// When selection.filePath changes (from gear) → expand tree to that file
-watch(() => selection.filePath, (filePath) => {
-  if (filePath) {
-    fileTree.expandToPath(filePath)
+// When selection.filePath changes → expand tree; gear target → jump to Source tab
+watch(() => selection.filePath, (filePath, prev) => {
+  if (filePath) fileTree.expandToPath(filePath)
+  if (filePath && selection.source === 'gear-preview' && filePath !== prev) {
+    activeTab.value = 'source'
   }
 }, { immediate: true })
 
@@ -522,10 +523,10 @@ watch(activeTab, (tab) => {
   }
 }, { immediate: true })
 
-// Restore last selected file on mount
+// Restore last selected file on mount (do not pin source=file — gear must keep syncing)
 onMounted(() => {
   if (panel.lastFile && !selection.filePath) {
-    fromFile(panel.lastFile)
+    restoreFilePath(panel.lastFile)
     if (activeTab.value === 'files') {
       fileTree.expandToPath(panel.lastFile)
     }

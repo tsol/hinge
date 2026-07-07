@@ -1,40 +1,97 @@
 <script setup lang="ts">
-import { reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { COG_SIZE } from '../constants'
+import { usePersistedState } from '../composables/usePersistedState'
 
-defineProps<{
+const props = withDefaults(defineProps<{
   menuOpen: boolean
   badgeCount?: number
-}>()
+  /** Persisted drawer width — fallback when panel DOM is not measurable yet */
+  panelWidth?: number
+}>(), {
+  panelWidth: 380,
+})
 
 const emit = defineEmits<{
   toggle: []
 }>()
 
+const { state: togglePos } = usePersistedState('menuToggle', { y: 0 })
+
 const drag = reactive({
   active: false,
-  x: 0,
-  y: 0,
-  offsetX: 0,
   offsetY: 0,
   startX: 0,
   startY: 0,
 })
 let moved = false
 
-function positionRightTop() {
-  const w = window.visualViewport?.width ?? window.innerWidth
-  drag.x = Math.max(0, w - COG_SIZE)
-  drag.y = 0
+/** Bump to re-read drawer.getBoundingClientRect() on resize / panel width change */
+const measureTick = ref(0)
+let drawerObserver: ResizeObserver | null = null
+
+function viewportSize() {
+  const vv = window.visualViewport
+  return {
+    w: vv?.width ?? window.innerWidth,
+    h: vv?.height ?? window.innerHeight,
+  }
 }
 
-onMounted(() => {
-  positionRightTop()
-})
+function anchorX(): number {
+  measureTick.value // reactive dependency
+  if (!props.menuOpen) return 0
+  const drawer = document.querySelector('.drawer') as HTMLElement | null
+  if (drawer) return drawer.getBoundingClientRect().right - COG_SIZE
+  return Math.max(0, props.panelWidth - COG_SIZE)
+}
+
+function clampY(y = togglePos.y as number): number {
+  const { h } = viewportSize()
+  return Math.min(Math.max(0, y), Math.max(0, h - COG_SIZE))
+}
 
 const toggleStyle = computed(() => ({
-  transform: `translate3d(${drag.x}px, ${drag.y}px, 0)`,
+  transform: `translate3d(${anchorX()}px, ${clampY()}px, 0)`,
 }))
+
+function onViewportChange() {
+  measureTick.value++
+  togglePos.y = clampY()
+}
+
+async function bindDrawerObserver(open: boolean) {
+  drawerObserver?.disconnect()
+  drawerObserver = null
+  if (!open) {
+    measureTick.value++
+    return
+  }
+  await nextTick()
+  const drawer = document.querySelector('.drawer')
+  if (!drawer) {
+    measureTick.value++
+    return
+  }
+  drawerObserver = new ResizeObserver(() => { measureTick.value++ })
+  drawerObserver.observe(drawer)
+  measureTick.value++
+}
+
+watch(() => props.menuOpen, (open) => { bindDrawerObserver(open) }, { immediate: true })
+watch(() => props.panelWidth, () => { measureTick.value++ })
+
+onMounted(() => {
+  togglePos.y = clampY()
+  window.addEventListener('resize', onViewportChange)
+  window.visualViewport?.addEventListener('resize', onViewportChange)
+})
+
+onUnmounted(() => {
+  drawerObserver?.disconnect()
+  window.removeEventListener('resize', onViewportChange)
+  window.visualViewport?.removeEventListener('resize', onViewportChange)
+})
 
 function onPointerDown(e: PointerEvent) {
   const target = e.currentTarget as HTMLElement | null
@@ -43,8 +100,7 @@ function onPointerDown(e: PointerEvent) {
   drag.active = true
   drag.startX = e.clientX
   drag.startY = e.clientY
-  drag.offsetX = e.clientX - drag.x
-  drag.offsetY = e.clientY - drag.y
+  drag.offsetY = e.clientY - (togglePos.y as number)
   try { target.setPointerCapture(e.pointerId) } catch {}
 }
 
@@ -52,12 +108,8 @@ function onPointerMove(e: PointerEvent) {
   if (!drag.active) return
   const dx = e.clientX - drag.startX
   const dy = e.clientY - drag.startY
-  if (Math.hypot(dx, dy) >= 8) {
-    moved = true
-  }
-  drag.x = e.clientX - drag.offsetX
-  drag.y = e.clientY - drag.offsetY
-  clampPosition()
+  if (Math.hypot(dx, dy) >= 8) moved = true
+  togglePos.y = clampY(e.clientY - drag.offsetY)
 }
 
 function onPointerUp(e: PointerEvent) {
@@ -68,16 +120,7 @@ function onPointerUp(e: PointerEvent) {
 }
 
 function onClick() {
-  if (!moved) {
-    emit('toggle')
-  }
-}
-
-function clampPosition() {
-  const w = window.visualViewport?.width ?? window.innerWidth
-  const h = window.visualViewport?.height ?? window.innerHeight
-  drag.x = Math.min(Math.max(0, drag.x), Math.max(0, w - COG_SIZE))
-  drag.y = Math.min(Math.max(0, drag.y), Math.max(0, h - COG_SIZE))
+  if (!moved) emit('toggle')
 }
 </script>
 
@@ -121,6 +164,7 @@ function clampPosition() {
   position: relative !important;
   width: 40px !important;
   height: 40px !important;
+  opacity: 0.5 !important;
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;

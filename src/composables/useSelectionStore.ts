@@ -34,11 +34,17 @@ export function useSelectionStore() {
     component: string
     filePath: string | null
   }) {
-    if (state.source === 'file') return
     state.source = 'gear-preview'
     if (payload.filePath) {
       state.filePath = payload.filePath
     }
+  }
+
+  /** Restore path after reload without blocking gear-driven updates. */
+  function restoreFilePath(filePath: string) {
+    if (!filePath) return
+    state.filePath = filePath
+    if (!state.source) state.source = 'gear-preview'
   }
 
   function fromFile(filePath: string) {
@@ -49,6 +55,7 @@ export function useSelectionStore() {
   return {
     selection: state as Readonly<Selection>,
     previewFromGear,
+    restoreFilePath,
     fromFile,
     resolveFilePath,
   }

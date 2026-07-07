@@ -53,6 +53,7 @@ import { usePersistedState } from './composables/usePersistedState'
 import { useFontScale } from './composables/useFontScale'
 import { prettifyMessage } from './utils/mdToHtml'
 import { postQueueContent } from './utils/queueApi'
+import { isAgentSetupError } from './utils/agentReply'
 import { API_BASE } from './const'
 
 const alwaysOnTop = ref(false)
@@ -159,6 +160,14 @@ async function fetchAssistantDetail(itemName: string): Promise<string> {
   }
 }
 
+function toastForCompletion(query: string, detail: string) {
+  if (isAgentSetupError(detail)) {
+    error(`❌ ${query}`, 'Agent not configured — check .hinge/new-session.sh')
+    return
+  }
+  if (detail) success(`✅ ${query}`, detail)
+}
+
 async function pollQueue() {
   try {
     const res = await fetch(`${API_BASE}/queue`)
@@ -178,7 +187,7 @@ async function pollQueue() {
       }
       const detail = await fetchAssistantDetail(item.name)
       if (detail) {
-        success(`✅ ${pending.query}`, detail)
+        toastForCompletion(pending.query, detail)
         pendingToasts.delete(stem)
       }
     }
@@ -195,7 +204,7 @@ async function pollQueue() {
         } else {
           const detail = await fetchAssistantDetail(item.name)
           if (detail) {
-            success(`✅ ${query}`, detail)
+            toastForCompletion(query, detail)
           } else {
             pendingToasts.set(stem, { query, itemName: item.name })
           }

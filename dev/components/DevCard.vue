@@ -5,7 +5,7 @@
   >
     <h3 class="dev-card__title">{{ title }}</h3>
     <p class="dev-card__desc" v-html="desc"></p>
-    <DevCardButton label="Подробнее" @select="$emit('select')" />
+    <DevCardButton :label="details" @select="$emit('select')" />
   </div>
 </template>
 
@@ -15,6 +15,7 @@ defineProps<{
   title: string
   desc: string
   highlighted: boolean
+  details: string
 }>()
 defineEmits<{ select: [] }>()
 </script>

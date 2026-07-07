@@ -1,14 +1,13 @@
 /**
- * hinge-server — standalone HTTP server for Hinge API
+ * Hinge API — request router.
  *
- * Runs on port 5177 inside the same Node process as Vite.
- * Vite proxies /hinge-api/* → localhost:5177.
- * The http.Server survives Vite HMR (module-level let), so agent
- * processes spawned with detached:true are never killed by HMR.
+ * Dev: Vite middleware on the same port as the dev server (`/hinge-api/*`).
+ * Optional: `startHingeServer()` for standalone HTTP (non-Vite consumers).
  */
 
 import http from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Connect } from 'vite'
 import {
   readFileSync, readdirSync, existsSync, mkdirSync,
   writeFileSync, appendFileSync, unlinkSync, renameSync,
@@ -30,7 +29,8 @@ import {
   getRunningTaskNames,
   hasRunningTasks,
 } from './agentRunner'
-import { readPrompt } from './utils/config'
+import { isAgentSetupError } from './utils/agentReply'
+import { readPrompt, probeAgentScripts } from './utils/config'
 import {
   getProjectRoot,
   getHingeRoot,
@@ -42,62 +42,131 @@ import {
   isValidQueueStatus,
   safeBasename,
 } from './utils/pathSafety'
-import { apiServerGlobalKey } from './utils/portRegistry'
+import {
+  setServerContext,
+  getServerContext,
+  traceDebugSnapshot,
+} from './utils/queueTrace'
+import { realpathSync } from 'node:fs'
 
-// ── Shared state → agentRunner.ts (persistent across HMR) ──
-function globalKey(port: number): string {
-  return apiServerGlobalKey(port)
+const PROCESS_HANDLERS_KEY = '__hinge_process_handlers'
+const MIDDLEWARE_SERVERS_KEY = '__hinge_middleware_servers'
+const VITE_BOOT_KEY = '__hinge_vite_boot'
+let standaloneServer: http.Server | null = null
+let hingeApiMiddlewareHandler: Connect.NextHandleFunction | null = null
+
+function getHingeApiMiddlewareHandler(): Connect.NextHandleFunction {
+  if (!hingeApiMiddlewareHandler) {
+    hingeApiMiddlewareHandler = createHingeApiMiddleware()
+  }
+  return hingeApiMiddlewareHandler
 }
 
-function getApiServer(port: number): http.Server | null {
-  return (globalThis as any)[globalKey(port)] ?? null
+function attachedMiddlewareServers(): WeakSet<Connect.Server> {
+  const g = globalThis as unknown as Record<string, WeakSet<Connect.Server>>
+  if (!g[MIDDLEWARE_SERVERS_KEY]) {
+    g[MIDDLEWARE_SERVERS_KEY] = new WeakSet()
+  }
+  return g[MIDDLEWARE_SERVERS_KEY]
 }
 
-function setApiServer(port: number, s: http.Server | null) {
-  if (s) (globalThis as any)[globalKey(port)] = s
-  else delete (globalThis as any)[globalKey(port)]
+function ensureProcessHandlers(): void {
+  const g = globalThis as unknown as Record<string, boolean>
+  if (g[PROCESS_HANDLERS_KEY]) return
+  g[PROCESS_HANDLERS_KEY] = true
+  process.on('uncaughtException', (err) => {
+    console.error('[hinge] uncaughtException:', err)
+  })
+  process.on('unhandledRejection', (reason) => {
+    console.error('[hinge] unhandledRejection:', reason)
+  })
 }
 
-// Catch-all for process-level errors so a crash doesn't orphan running tasks
-process.on('uncaughtException', (err) => {
-  console.error('[hinge] uncaughtException:', err)
-})
-process.on('unhandledRejection', (reason) => {
-  console.error('[hinge] unhandledRejection:', reason)
-})
+function bootHingeApi(port: number, mode: 'middleware' | 'standalone'): void {
+  ensureProcessHandlers()
+  setServerContext(port, mode)
+  void traceDebugSnapshot('server_start')
+  recoverAndSchedule()
+}
 
-// ── Public entry point ────────────────────────────────────
-export function startHingeServer(port = 5177): http.Server {
-  const existing = getApiServer(port)
-  if (existing) return existing
-  const server = http.createServer(handleRequest)
-  server.on('error', (err: any) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[hinge] Port ${port} already in use — server from previous cycle still alive, reusing`)
-      setApiServer(port, null)
+/** Insert before Vite's HTML fallback so /hinge-api never returns index.html. */
+function prependMiddleware(middlewares: Connect.Server, handle: Connect.NextHandleFunction): void {
+  const stack = (middlewares as Connect.Server & { stack?: Array<{ route: string; handle: Connect.NextHandleFunction }> }).stack
+  if (stack) {
+    stack.unshift({ route: '', handle })
+  } else {
+    middlewares.use(handle)
+  }
+}
+
+/** Vite dev — prepend middleware on each dev server instance (survives port changes / restarts). */
+export function attachHingeApiMiddleware(middlewares: Connect.Server): void {
+  const attached = attachedMiddlewareServers()
+  if (attached.has(middlewares)) return
+  prependMiddleware(middlewares, getHingeApiMiddlewareHandler())
+  attached.add(middlewares)
+}
+
+/** Called when Vite httpServer is listening — may differ from config if port was busy. */
+export function onHingeViteListening(vitePort: number): void {
+  setServerContext(vitePort, 'middleware')
+  const g = globalThis as unknown as Record<string, number | boolean>
+  const lastPort = g[VITE_BOOT_KEY] as number | undefined
+  if (lastPort !== vitePort) {
+    g[VITE_BOOT_KEY] = vitePort
+    console.log(`[hinge] API middleware ${API_BASE}/* on Vite :${vitePort}`)
+    void traceDebugSnapshot('server_start')
+  }
+  recoverAndSchedule()
+}
+
+/** @deprecated Use attachHingeApiMiddleware + onHingeViteListening */
+export function attachHingeApiToVite(middlewares: Connect.Server, vitePort: number): void {
+  attachHingeApiMiddleware(middlewares)
+  onHingeViteListening(vitePort)
+}
+
+export function createHingeApiMiddleware(): Connect.NextHandleFunction {
+  return (req, res, next) => {
+    const pathOnly = (req.url ?? '').split('?')[0]
+    if (!pathOnly.startsWith(API_BASE)) {
+      next()
       return
     }
+    void handleRequest(req, res).catch((err) => {
+      console.error('[hinge] API middleware error:', err)
+      if (!res.headersSent) {
+        res.statusCode = 500
+        res.end('Internal Server Error')
+      }
+    })
+  }
+}
+
+/** Optional standalone HTTP server (non-Vite). */
+export function startHingeServer(port = 5177): http.Server {
+  if (standaloneServer) return standaloneServer
+  const server = http.createServer(handleRequest)
+  server.on('error', (err: NodeJS.ErrnoException) => {
     console.error('[hinge] HTTP server error:', err)
   })
   server.listen(port, () => {
     console.log(`[hinge-server] Listening on :${port}`)
-    // Recover orphaned processing tasks after server restart/reload
-    recoverAndSchedule()
+    bootHingeApi(port, 'standalone')
   })
-  setApiServer(port, server)
+  standaloneServer = server
   return server
 }
 
-export function stopHingeServer(port = 5177): void {
-  const server = getApiServer(port)
-  if (server) {
-    try { server.close() } catch { /* ignore */ }
-    setApiServer(port, null)
+export function stopHingeServer(): void {
+  if (standaloneServer) {
+    try { standaloneServer.close() } catch { /* ignore */ }
+    standaloneServer = null
   }
 }
 
 // ── Request router ────────────────────────────────────────
-async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+export async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   try {
   const method = req.method ?? 'GET'
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
@@ -411,10 +480,20 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   // ── Status ──
   if (pathname === `${API_BASE}/status`) {
     if (method !== 'GET') { status(res, 405, 'GET only'); return }
+    const ctx = getServerContext()
+    const projectRoot = getProjectRoot()
+    let projectRootReal = projectRoot
+    try { projectRootReal = realpathSync(projectRoot) } catch { /* keep */ }
     json(res, {
       running: hasRunningTasks(),
       processing: getRunningTaskNames(),
-      projectRoot: getProjectRoot(),
+      projectRoot,
+      projectRootReal,
+      serverPid: process.pid,
+      vitePort: ctx?.port ?? null,
+      serverMode: ctx?.mode ?? null,
+      serverStartedAt: ctx?.startedAt ?? null,
+      agentScripts: probeAgentScripts(),
     })
     return
   }
@@ -509,6 +588,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   if (pathname === `${API_BASE}/execute`) {
     if (method !== 'POST') { json(res, { error: 'POST only' }, 405); return }
     const { recovered } = recoverAndSchedule()
+    void traceDebugSnapshot('execute')
     json(res, { ok: true, recovered })
     return
   }
@@ -689,7 +769,10 @@ function listQueue(): QueueItem[] {
     })()
     // Detect failed tasks
     const errorPath = resolveQueueFolder(name, '.error')
-    const failed = errorPath ? existsSync(errorPath) : false
+    let failed = errorPath ? existsSync(errorPath) : false
+    if (!failed && content.includes('**Assistant:**') && isAgentSetupError(content)) {
+      failed = true
+    }
     const alias = name.replace(/_(new|wait|done|processing)$/, '')
     let displayStatus: QueueItem['status'] = failed ? 'error' : status
     let agentStatus = status === 'processing' ? getAgentStatus(name) : null

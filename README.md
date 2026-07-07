@@ -156,18 +156,54 @@ Open `http://localhost:5176` in your browser. The cog appears in the bottom-righ
 
 ## Integration
 
-### Component pattern (recommended for Vue apps)
+HINGE runs in **dev only** (Vite plugin + overlay UI). The API is served on the **same port**
+as your Vite dev server — no second process, no proxy config, no extra port to open in tunnels.
+
+All routes live under `/hinge-api` (see `API_BASE` in `src/const.ts`).
+
+### 1. Install
+
+```bash
+pnpm add hinge
+# or npm install hinge
+```
+
+### 2. Vite plugin (required)
+
+Add the plugin to `vite.config.ts`. On first `pnpm dev` it auto-creates `.hinge/` with agent
+scripts (`new-session.sh`, `continue-session.sh`, `whisper.sh`, internal wrapper).
 
 ```ts
 // vite.config.ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
 import hingePlugin from 'hinge/plugin'
+
 export default defineConfig({
-  plugins: [vue(), hingePlugin()],
+  plugins: [
+    vue(),
+    hingePlugin(),   // mounts /hinge-api/* as Vite middleware
+  ],
+  server: {
+    port: 5173,      // any port — API follows automatically
+  },
 })
 ```
 
+**What the plugin does:**
+
+- Registers `GET/POST /hinge-api/*` middleware on the Vite dev server
+- Generates `.hinge/` agent scripts if missing
+- Runs queue recovery on startup and every 5 minutes
+
+You do **not** need `server.proxy`, `serverPort`, or a separate API port.
+
+### 3. UI — Vue component (recommended)
+
+Use the `Hinge` component so it shares your app's Vue instance:
+
 ```vue
-<!-- App.vue — add <Hinge /> inside your root layout -->
+<!-- App.vue — inside your root layout -->
 <template>
   <v-app>
     <router-view />
@@ -181,13 +217,46 @@ import 'hinge/style.css'
 </script>
 ```
 
-### Standalone pattern (for non-Vue projects)
+### 4. UI — standalone mount (non-Vue or quick test)
 
 ```ts
+// main.ts
 import { mountHinge } from 'hinge'
 import 'hinge/style.css'
+
 mountHinge('body')
 ```
+
+Still requires the Vite plugin in `vite.config.ts` for file/queue API.
+
+### 5. Agent scripts
+
+After the first dev start, edit `.hinge/new-session.sh` and `.hinge/continue-session.sh`
+to call your agent CLI (Hermes, Claude Code, etc.). See [Agent scripts](#agent-scripts) above.
+
+### Dev playground option
+
+For the Hinge repo itself (`pnpm dev` on `:5176`), the plugin passes `isMainApp: true` so the
+cog stays on top. Consumers can ignore this:
+
+```ts
+hingePlugin({ isMainApp: true })
+```
+
+### Tunnels / mobile access
+
+Expose **one** port — your Vite dev server. Example Cloudflare tunnel:
+
+```bash
+cloudflared tunnel --url http://localhost:5173
+```
+
+The browser loads the app and calls `/hinge-api/...` on the same origin — no second tunnel.
+
+### Optional: standalone HTTP API (advanced)
+
+`src/server.ts` exports `startHingeServer(port)` for running the API outside Vite (custom Node
+server, integration tests). Normal consumer setup uses **middleware only** — you do not call this.
 
 ### Package exports
 
@@ -196,7 +265,7 @@ mountHinge('body')
 | `hinge` | `hinge` | `mountHinge()` — full UI with bundled Vue |
 | `hinge/style.css` | `hinge/style.css` | Component styles |
 | `hinge/component` | `hinge/component` | `Hinge` Vue component (uses host Vue) |
-| `hinge/plugin` | `hinge/plugin` | Vite plugin (API proxy + auto-generated agent scripts) |
+| `hinge/plugin` | `hinge/plugin` | Vite plugin — API middleware + agent script bootstrap |
 
 ---
 
@@ -212,7 +281,19 @@ mountHinge('body')
 
 | Command | Description |
 |---------|-------------|
-| `pnpm dev` | Start dev server (:5176) + API (:5177) |
+| `pnpm dev` | Start dev server (default :5174) with API at `/hinge-api` on the same port |
+
+### Process management (Hermes / project.sh)
+
+Production workflow uses [`../project.sh`](../project.sh) — not raw `pnpm dev`:
+
+```bash
+/opt/data/workspace/project.sh hinge restart
+/opt/data/workspace/project.sh hinge status   # shows Hinge API: ok|fail
+```
+
+`project.sh` assigns a stable port, starts cloudflared tunnel, kills orphan Vite on restart,
+and verifies `/hinge-api/status` returns JSON after start.
 | `pnpm build` | Typecheck + build to `dist/` |
 | `pnpm preview` | Preview production build |
 
@@ -232,7 +313,7 @@ src/
 ├── main.ts              # mountHinge() entry point
 ├── component.ts         # Vue component export
 ├── plugin.ts            # Vite plugin
-├── server.ts            # API server (standalone HTTP)
+├── server.ts            # API router + Vite middleware (optional standalone HTTP)
 ├── const.ts             # API_BASE, shared constants
 ├── Hinge.vue            # Root Vue component
 ├── components/
@@ -258,7 +339,7 @@ src/
 │   ├── queueApi.ts          # Queue HTTP helpers
 │   ├── buildComponentBlock.ts
 │   ├── highlightLang.ts
-│   └── portRegistry.ts
+│   └── queueTrace.ts        # Queue debug logging
 ├── locales/
 │   ├── en.ts                # English strings
 │   └── ru.ts                # Russian strings

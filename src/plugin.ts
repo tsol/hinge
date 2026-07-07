@@ -1,15 +1,13 @@
-import type { Plugin, UserConfig, ProxyOptions } from 'vite'
+import type { Plugin } from 'vite'
 import { writeFileSync, chmodSync, existsSync, mkdirSync } from 'fs'
 import { resolve } from 'path'
-import { API_BASE } from './const'
-import * as http from 'http'
-import { probeOurHingeApi } from './probeApi'
+import { attachHingeApiMiddleware, onHingeViteListening } from './server'
+import { recoverAndSchedule } from './agentRunner'
 
 // ── Server state (globalThis — survives Vite HMR module reload) ────────
 const PLUGIN_STATE_KEY = '__hinge_plugin_state'
 
 interface PluginState {
-  port: number
   recoveryTimer?: ReturnType<typeof setTimeout>
   recoveryInterval?: ReturnType<typeof setInterval>
 }
@@ -17,7 +15,7 @@ interface PluginState {
 function pluginState(): PluginState {
   const g = globalThis as unknown as Record<string, PluginState>
   if (!g[PLUGIN_STATE_KEY]) {
-    g[PLUGIN_STATE_KEY] = { port: 0 }
+    g[PLUGIN_STATE_KEY] = {}
   }
   return g[PLUGIN_STATE_KEY]
 }
@@ -28,37 +26,6 @@ function clearRecoveryTimers(): void {
   if (state.recoveryInterval) clearInterval(state.recoveryInterval)
   state.recoveryTimer = undefined
   state.recoveryInterval = undefined
-}
-
-import { API_PORT_START, API_PORT_END, findRegisteredApiPort } from './utils/portRegistry'
-
-async function resolveApiPort(explicit?: number): Promise<number> {
-  const state = pluginState()
-
-  // Same Node process after HMR — server object still in globalThis
-  const registered = findRegisteredApiPort(API_PORT_START, API_PORT_END)
-  if (registered) {
-    state.port = registered
-    return registered
-  }
-
-  // Remembered port from earlier in this session (same project only)
-  if (state.port && await probeOurHingeApi(state.port)) {
-    return state.port
-  }
-
-  // Orphan from a previous `pnpm dev` of THIS project — reuse if it responds
-  for (let p = API_PORT_START; p <= API_PORT_END; p++) {
-    if (await probeOurHingeApi(p)) {
-      console.log(`[hinge] Reusing existing API server on :${p}`)
-      state.port = p
-      return p
-    }
-  }
-
-  const port = explicit ?? await findFreePort(API_PORT_START)
-  state.port = port
-  return port
 }
 
 // ── Agent script templates ─────────────────────────────────
@@ -186,6 +153,12 @@ PROC="$DIR/\${ALIAS}_processing"
 DONE="$DIR/\${ALIAS}_done"
 PID_FILE="$PROC/.pid"
 WRAPPER_PID="$DIR/.wrapper_\${ALIAS}.pid"
+HINGE_HOST="$(hostname -s 2>/dev/null || hostname)"
+
+_write_pid_files() {
+  printf '%s\\n%s\\n' "$$" "$HINGE_HOST" > "$PID_FILE" 2>/dev/null || true
+  printf '%s\\n%s\\n' "$$" "$HINGE_HOST" > "$WRAPPER_PID" 2>/dev/null || true
+}
 
 _resolve_folder() {
   if [ -d "$PROC" ]; then echo "$PROC"
@@ -202,8 +175,7 @@ _cleanup() {
 trap _cleanup TERM INT
 
 mkdir -p "$PROC" 2>/dev/null || true
-echo "$$" > "$PID_FILE" 2>/dev/null || true
-echo "$$" > "$WRAPPER_PID" 2>/dev/null || true
+_write_pid_files
 
 if [ "$SCRIPT_TYPE" = "continue" ]; then
     USER_SCRIPT="$DIR/continue-session.sh"
@@ -261,49 +233,14 @@ function ensureScripts() {
 
 // ── Vite Plugin ────────────────────────────────────────────
 export interface HingePluginOptions {
-  serverPort?: number
   /** Mark as the main app (dev playground) — sets __HINGE_DEFAULT_PROJECT for always-on-top cog */
   isMainApp?: boolean
 }
 
-// Scan for a free port — tries port, then port+1, ... port+20
-// Uses http.createServer (same API as net.createServer for listening) to avoid
-// bundler issues with 'net' module in Vite library mode
-function findFreePort(start: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    function tryPort(port: number) {
-      if (port > start + 20) return reject(new Error('No free port found'))
-      const srv = http.createServer()
-      srv.on('error', () => { srv.close(); tryPort(port + 1) })
-      srv.listen(port, () => { srv.close(() => resolve(port)) })
-    }
-    tryPort(start)
-  })
-}
-
 export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
-  // Port resolved lazily — determined in config() hook before proxy is set
-  let port: number
-
   return {
     name: 'hinge-plugin',
-
-    async config(userConfig: UserConfig) {
-      port = await resolveApiPort(options.serverPort)
-      // Inject Vite proxy — forward /hinge-api/* to the hinge API server
-      const existingProxy = (userConfig.server as any)?.proxy ?? {}
-      return {
-        server: {
-          proxy: {
-            ...existingProxy,
-            [API_BASE]: {
-              target: `http://localhost:${port}`,
-              changeOrigin: true,
-            } as ProxyOptions,
-          },
-        },
-      }
-    },
+    enforce: 'pre',
 
     transformIndexHtml() {
       // Only set __HINGE_DEFAULT_PROJECT for the main dev app (not lib consumers like MOGU)
@@ -312,57 +249,47 @@ export default function hingePlugin(options: HingePluginOptions = {}): Plugin {
       }
     },
 
-    configureServer() {
+    configureServer(server) {
       ensureScripts()
 
       const state = pluginState()
       clearRecoveryTimers()
 
-      import('./server').then(async ({ startHingeServer }) => {
-        const alive = await probeOurHingeApi(port)
-        if (!alive) {
-          startHingeServer(port)
-          console.log(`[hinge] API server on :${port}, proxy ${API_BASE}/* → :${port}`)
-        } else {
-          console.log(`[hinge] API server already on :${port} (reused)`)
-        }
-      }).catch((e) => {
-        console.error('[hinge] Failed to start API server:', e)
-      })
+      attachHingeApiMiddleware(server.middlewares)
+
+      const syncVitePort = () => {
+        const addr = server.httpServer?.address()
+        const vitePort =
+          typeof addr === 'object' && addr && 'port' in addr
+            ? addr.port
+            : (server.config.server.port ?? 5173)
+        onHingeViteListening(vitePort)
+      }
+
+      if (server.httpServer?.listening) syncVitePort()
+      else server.httpServer?.once('listening', syncVitePort)
 
       const RECOVERY_INTERVAL_MS = 5 * 60 * 1000
 
       function runRecovery() {
-        const req = http.request(
-          { hostname: 'localhost', port, path: `${API_BASE}/execute`, method: 'POST' },
-          (r: any) => {
-            let body = ''
-            r.on('data', (d: string) => body += d)
-            r.on('end', () => {
-              try {
-                const result = JSON.parse(body)
-                if (result.recovered > 0) {
-                  console.log(`[hinge] Recovered ${result.recovered} dead task(s)`)
-                }
-              } catch { /* ignore */ }
-            })
-          },
-        )
-        req.on('error', () => { /* server not ready yet */ })
-        req.end()
+        const { recovered } = recoverAndSchedule()
+        if (recovered > 0) {
+          console.log(`[hinge] Recovered ${recovered} dead task(s)`)
+        }
       }
 
       state.recoveryTimer = setTimeout(runRecovery, 5000)
       state.recoveryInterval = setInterval(runRecovery, RECOVERY_INTERVAL_MS)
       console.log(`[hinge] Recovery: every ${RECOVERY_INTERVAL_MS / 60000} min, first check in 5s`)
+
+      // Re-attach after Vite finishes internal middleware setup (stack may be rebuilt)
+      return () => {
+        attachHingeApiMiddleware(server.middlewares)
+      }
     },
 
     closeBundle() {
       clearRecoveryTimers()
-      import('./server').then(({ stopHingeServer }) => {
-        const p = pluginState().port
-        if (p) stopHingeServer(p)
-      })
     },
   }
 }

@@ -261,35 +261,36 @@ async function refreshItems() {
         nextTick(() => scrollChatToBottom())
       }
     }
-    const next: Record<string, boolean> = {}
-    for (const item of fresh) {
-      if (item.status === 'processing') next[item.name] = true
-    }
-    processingTask.value = next
-
-    // Clean stale agentStatus entries for non-processing tasks
-    const staleStatusKeys = Object.keys(agentStatus.value).filter(k => !(k in next))
-    if (staleStatusKeys.length > 0) {
-      const cleaned = { ...agentStatus.value }
-      for (const k of staleStatusKeys) delete cleaned[k]
-      agentStatus.value = cleaned
-    }
-
-    // Refresh agent status from queue response (server includes agentStatus for processing tasks)
-    const statusUpdates: Record<string, { status: string; checkedAt: number; elapsed?: number }> = {}
-    for (const item of fresh) {
-      if (item.agentStatus && item.agentStatus.status) {
-        statusUpdates[item.name] = {
-          status: item.agentStatus.status,
-          checkedAt: Date.now(),
-          elapsed: item.agentStatus.elapsed,
-        }
-      }
-    }
-    if (Object.keys(statusUpdates).length > 0) {
-      agentStatus.value = { ...agentStatus.value, ...statusUpdates }
-    }
+    syncAgentStatusFromItems(fresh)
   } catch { /* silent */ }
+}
+
+function syncAgentStatusFromItems(fresh: QueueItem[]) {
+  const proc: Record<string, boolean> = {}
+  for (const item of fresh) {
+    if (item.status === 'processing') proc[item.name] = true
+  }
+  processingTask.value = proc
+
+  const staleStatusKeys = Object.keys(agentStatus.value).filter(k => !(k in proc))
+  if (staleStatusKeys.length > 0) {
+    const cleaned = { ...agentStatus.value }
+    for (const k of staleStatusKeys) delete cleaned[k]
+    agentStatus.value = cleaned
+  }
+
+  const statusUpdates: Record<string, { status: string; checkedAt: number; elapsed?: number }> = {}
+  for (const item of fresh) {
+    if (item.status !== 'processing' || !item.agentStatus) continue
+    statusUpdates[item.name] = {
+      status: item.agentStatus.status,
+      checkedAt: Date.now(),
+      elapsed: item.agentStatus.elapsed,
+    }
+  }
+  if (Object.keys(statusUpdates).length > 0) {
+    agentStatus.value = { ...agentStatus.value, ...statusUpdates }
+  }
 }
 
 async function loadItems() {
@@ -302,11 +303,7 @@ async function loadItems() {
     await syncEditingContent(fresh)
     items.value = fresh
     initSelected(fresh)
-    const proc: Record<string, boolean> = {}
-    for (const item of fresh) {
-      if (item.status === 'processing') proc[item.name] = true
-    }
-    processingTask.value = proc
+    syncAgentStatusFromItems(fresh)
   } catch (e: any) {
     error.value = e.message || 'Failed to load queue'
   } finally {
@@ -339,16 +336,17 @@ function statusIcon(status: string) {
   return '📥'
 }
 
-/** Label for the processing status bar */
+/** Label for the processing status bar — elapsed seconds always from backend poll */
 function processingStatusLabel(name: string): string {
   const a = agentStatus.value[name]
   const l = lang.value
-  if (!a) return l.processing
-  const secLabel = a.elapsed != null ? (a.elapsed <= 1 ? '1s' : `${a.elapsed}s`) : ''
+  const secLabel = a?.elapsed != null ? (a.elapsed <= 1 ? '1s' : `${a.elapsed}s`) : ''
   const suffix = secLabel ? ` (${secLabel})` : ''
-  if (a.status === 'running' || a.status === 'no_pid') return `${l.processing}${suffix}`
+  if (!a) return `${l.processing}${suffix}`
+  if (a.status === 'running') return `${l.processing}${suffix}`
+  if (a.status === 'no_pid') return `${l.processing}${suffix}`
   if (a.status === 'stopped') return `⚠ ${l.stopped}${suffix}`
-  return l.processing
+  return `${l.processing}${suffix}`
 }
 
 /** Extract first meaningful line from content (fallback when no header found) */

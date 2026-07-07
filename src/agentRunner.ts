@@ -24,11 +24,17 @@
 import {
   readFileSync, readdirSync, existsSync,
   appendFileSync, unlinkSync, renameSync, statSync,
+  type Dirent,
 } from 'node:fs'
 import { resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { resolveAgentScripts, readPrompt } from './utils/config'
 import { getHingeRoot, resolveInside, resolveQueueFolder } from './utils/pathSafety'
+import { traceQueue, traceDebugSnapshot } from './utils/queueTrace'
+import { withQueueDispatch } from './utils/queueDispatch'
+import { parsePidFile, isForeignDispatchHost, type PidFileRecord } from './utils/dispatchHost'
+
+export { isAgentSetupError } from './utils/agentReply'
 
 // ── Persistent in-memory state (survives Vite HMR module reload) ─────────────
 
@@ -59,8 +65,7 @@ export function readWrapperPid(folderPath: string): number | null {
   const pidPath = resolveInside(folderPath, '.pid')
   if (!pidPath || !existsSync(pidPath)) return null
   try {
-    const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
-    return pid && !isNaN(pid) ? pid : null
+    return parsePidFile(readFileSync(pidPath, 'utf-8')).pid
   } catch {
     return null
   }
@@ -80,15 +85,20 @@ function probePidFile(pidPath: string): WrapperLivenessInfo | null {
   if (!existsSync(pidPath)) return null
   const elapsed = Math.floor((Date.now() - statSync(pidPath).mtimeMs) / 1000)
   try {
-    const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
-    if (!pid || isNaN(pid)) return { liveness: 'stopped', elapsed }
+    const { pid, host } = parsePidFile(readFileSync(pidPath, 'utf-8'))
+    if (!pid) return { liveness: 'stopped', elapsed }
+    if (isForeignDispatchHost(host)) {
+      return { liveness: 'running', pid, elapsed }
+    }
     try {
       process.kill(pid, 0)
       return { liveness: 'running', pid, elapsed }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException)?.code
-      // EPERM = process exists but not signalable — still alive
       if (code === 'EPERM') return { liveness: 'running', pid, elapsed }
+      if (code === 'ESRCH' && !existsSync(`/proc/${pid}`)) {
+        return { liveness: 'running', pid, elapsed }
+      }
       return { liveness: 'stopped', pid, elapsed }
     }
   } catch {
@@ -171,7 +181,53 @@ export function isWrapperAlive(folderPath: string): boolean {
   return inspectWrapper(folderPath).liveness === 'running'
 }
 
-/** Reconcile in-memory slot with disk after HMR or before scheduling. */
+/** Any live wrapper on disk — shared across HMR and duplicate API server processes. */
+export function findActiveWrapperAlias(): string | null {
+  const queueDir = getHingeRoot()
+  if (!existsSync(queueDir)) return null
+
+  let entries: Dirent[]
+  try { entries = readdirSync(queueDir, { withFileTypes: true }) as Dirent[] } catch { return null }
+
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.startsWith('.wrapper_') || !e.name.endsWith('.pid')) continue
+    const pidPath = resolveInside(queueDir, e.name)
+    if (!pidPath) continue
+    const probe = probePidFile(pidPath)
+    if (probe?.liveness === 'running') {
+      return e.name.slice('.wrapper_'.length, -'.pid'.length)
+    }
+  }
+
+  for (const e of entries) {
+    if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
+    const alias = taskAlias(e.name)
+    const info = inspectWrapperByAlias(alias)
+    if (info.liveness === 'running') return alias
+  }
+
+  return null
+}
+
+/** Wrapper claim file exists — do not recover when owned elsewhere or unverified. */
+function hasWrapperClaim(alias: string): boolean {
+  const rec = readWrapperClaim(alias)
+  if (!rec) return false
+  if (isForeignDispatchHost(rec.host)) return true
+  return rec.pid !== null
+}
+
+function readWrapperClaim(alias: string): PidFileRecord | null {
+  const queueDir = getHingeRoot()
+  const claim = queueDir ? resolveInside(queueDir, `.wrapper_${alias}.pid`) : null
+  if (!claim || !existsSync(claim)) return null
+  try {
+    return parsePidFile(readFileSync(claim, 'utf-8'))
+  } catch {
+    return null
+  }
+}
+
 export function syncRunningTasksFromDisk(): void {
   const runningTasks = getRunningTasks()
   const queueDir = getHingeRoot()
@@ -185,10 +241,16 @@ export function syncRunningTasksFromDisk(): void {
     if (!alive) runningTasks.delete(name)
   }
 
+  const activeAlias = findActiveWrapperAlias()
+  if (activeAlias) {
+    const procName = `${activeAlias}_processing`
+    if (resolveQueueFolder(procName)) runningTasks.add(procName)
+  }
+
   for (const e of readdirSync(queueDir, { withFileTypes: true })) {
     if (!e.isDirectory() || !e.name.endsWith('_processing')) continue
-    const folderPath = resolveQueueFolder(e.name)
-    if (folderPath && isWrapperAlive(folderPath)) {
+    const alias = taskAlias(e.name)
+    if (inspectWrapperByAlias(alias).liveness === 'running') {
       runningTasks.add(e.name)
     }
   }
@@ -199,6 +261,10 @@ export function syncRunningTasksFromDisk(): void {
  * Uses `inspectWrapper()` — same PID probe as queue agentStatus / cancel.
  */
 export function recoverDeadTasks(): number {
+  return withQueueDispatch('recover_dead', () => recoverDeadTasksUnlocked()) ?? 0
+}
+
+function recoverDeadTasksUnlocked(): number {
   syncRunningTasksFromDisk()
   const queueDir = getHingeRoot()
   if (!existsSync(queueDir)) return 0
@@ -214,8 +280,13 @@ export function recoverDeadTasks(): number {
     const { liveness } = inspectWrapper(folderPath, e.name)
     if (liveness === 'running') continue
     if (inspectWrapperByAlias(taskAlias(e.name)).liveness === 'running') continue
-    // Spawn in flight — wrapper may not have written .pid yet
-    if (runningTasks.has(e.name)) continue
+    const alias = taskAlias(e.name)
+    if (hasWrapperClaim(alias)) {
+      traceQueue('recover_skip_claim', { folder: e.name, liveness })
+      continue
+    }
+    // Skip only while wrapper process is actually alive — not stale RAM slot
+    if (runningTasks.has(e.name) && inspectWrapper(folderPath, e.name).liveness === 'running') continue
 
     if (liveness === 'stopped') {
       const pidPath = resolveInside(folderPath, '.pid')
@@ -228,6 +299,7 @@ export function recoverDeadTasks(): number {
       if (doneDest) {
         renameSync(folderPath, doneDest)
         console.log(`[hinge] Recovered dead task: ${e.name} → ${doneName} (${liveness})`)
+        traceQueue('recover_dead', { folder: e.name, doneName, liveness })
         recovered++
       }
     } catch (err) {
@@ -265,6 +337,10 @@ function extractLastUserMessage(content: string): string {
 // ── Spawn one wrapper for a _processing folder ─────────────────────────────
 
 export function runTaskChunk(folderName: string): void {
+  withQueueDispatch('run_chunk', () => runTaskChunkUnlocked(folderName))
+}
+
+function runTaskChunkUnlocked(folderName: string): void {
   syncRunningTasksFromDisk()
   const runningTasks = getRunningTasks()
 
@@ -274,12 +350,21 @@ export function runTaskChunk(folderName: string): void {
   // Disk is source of truth: alive wrapper → do not spawn again
   if (isWrapperAlive(folderPath)) {
     runningTasks.add(folderName)
+    traceQueue('spawn_skip_alive', { folderName })
     return
   }
 
   if (runningTasks.has(folderName)) {
-    console.log(`[hinge] Slot busy for ${folderName} — skipping duplicate spawn`)
-    return
+    const alias = taskAlias(folderName)
+    const live = inspectWrapperByAlias(alias).liveness === 'running' || isWrapperAlive(folderPath)
+    if (live) {
+      console.log(`[hinge] Slot busy for ${folderName} — skipping duplicate spawn`)
+      traceQueue('spawn_skip_busy', { folderName })
+      return
+    }
+    // Stale in-memory slot — no wrapper on disk (e.g. sync added before spawn)
+    runningTasks.delete(folderName)
+    traceQueue('spawn_clear_stale_slot', { folderName })
   }
 
   runningTasks.add(folderName)
@@ -289,7 +374,7 @@ export function runTaskChunk(folderName: string): void {
     runningTasks.delete(folderName)
     const doneDest = resolveQueueFolder(folderName.replace('_processing', '_done'))
     if (doneDest) try { renameSync(folderPath, doneDest) } catch { /* ignore */ }
-    tryStartNextTask()
+    tryStartNextTaskUnlocked()
     return
   }
 
@@ -332,7 +417,12 @@ export function runTaskChunk(folderName: string): void {
       try { appendFileSync(logPath, d.toString(), 'utf-8') } catch { /* ignore */ }
     })
 
-    child.on('close', () => {
+    child.on('close', (code) => {
+      traceQueue('wrapper_close', { folderName, alias, exitCode: code })
+      const taskFolder =
+        resolveQueueFolder(folderName)
+        ?? resolveQueueFolder(folderName.replace('_processing', '_done'))
+      void traceDebugSnapshot(`close:${alias}`, taskFolder ?? undefined)
       runningTasks.delete(folderName)
       syncRunningTasksFromDisk()
       tryStartNextTask()
@@ -340,10 +430,20 @@ export function runTaskChunk(folderName: string): void {
 
     child.on('error', (err) => {
       console.error(`[hinge] Agent spawn error for ${folderName}:`, err)
+      traceQueue('wrapper_error', { folderName, alias, error: String(err) })
       runningTasks.delete(folderName)
       syncRunningTasksFromDisk()
       tryStartNextTask()
     })
+
+    traceQueue('wrapper_spawn', {
+      folderName,
+      alias,
+      scriptType,
+      wrapperPid: child.pid,
+      isFirstRun,
+    })
+    void traceDebugSnapshot(`spawn:${alias}`, folderPath)
   } catch {
     runningTasks.delete(folderName)
     tryStartNextTask()
@@ -358,20 +458,37 @@ export function enqueueTask(folderName: string): void {
   const taskQueue = getTaskQueue()
   if (runningTasks.has(folderName) || taskQueue.includes(folderName)) return
   taskQueue.push(folderName)
+  traceQueue('enqueue', { folderName, queueLen: taskQueue.length })
   tryStartNextTask()
 }
 
 /** Start the next task if no wrapper is running. */
 export function tryStartNextTask(): void {
+  withQueueDispatch('try_start', () => tryStartNextTaskUnlocked())
+}
+
+function tryStartNextTaskUnlocked(): void {
   syncRunningTasksFromDisk()
   const runningTasks = getRunningTasks()
   const taskQueue = getTaskQueue()
 
-  if (runningTasks.size > 0) return
+  const activeAlias = findActiveWrapperAlias()
+  if (activeAlias) {
+    const procName = `${activeAlias}_processing`
+    if (resolveQueueFolder(procName)) runningTasks.add(procName)
+    traceQueue('start_blocked_wrapper', { activeAlias, runningTasks: [...runningTasks] })
+    return
+  }
+
+  if (runningTasks.size > 0) {
+    traceQueue('start_blocked_slot', { runningTasks: [...runningTasks] })
+    return
+  }
 
   if (taskQueue.length > 0) {
     const next = taskQueue.shift()!
-    runTaskChunk(next)
+    traceQueue('start_from_queue', { folderName: next, queueRemaining: taskQueue.length })
+    runTaskChunkUnlocked(next)
     return
   }
 
@@ -392,30 +509,34 @@ export function tryStartNextTask(): void {
 
   try {
     renameSync(waitPath, processingPath)
+    traceQueue('promote_wait', { waitName, processingName })
   } catch (e) {
     console.error(`[hinge] Failed to promote ${waitName} to _processing:`, e)
+    traceQueue('promote_wait_failed', { waitName, error: String(e) })
     return
   }
 
-  runTaskChunk(processingName)
+  runTaskChunkUnlocked(processingName)
 }
 
 /** Startup + periodic maintenance: clean dead folders, then schedule. */
 export function recoverAndSchedule(): { recovered: number } {
-  const recovered = recoverDeadTasks()
-  tryStartNextTask()
-  return { recovered }
+  const result = withQueueDispatch('recover_and_schedule', () => {
+    const recovered = recoverDeadTasksUnlocked()
+    if (recovered > 0) traceQueue('recover_and_schedule', { recovered })
+    tryStartNextTaskUnlocked()
+    return { recovered }
+  })
+  return result ?? { recovered: 0 }
 }
 
-/** For queue UI and GET /wrapper — wrapper liveness for a queue folder or stem. */
+/** For queue UI — always returns backend elapsed (pid mtime) when a pid file exists. */
 export function getAgentStatus(folderName: string): {
   status: WrapperLiveness
   pid?: number
   elapsed?: number
-} | null {
-  const alias = taskAlias(folderName)
-  const info = inspectWrapperByAlias(alias)
-  if (info.liveness === 'no_pid') return null
+} {
+  const info = inspectWrapperByAlias(taskAlias(folderName))
   return { status: info.liveness, pid: info.pid, elapsed: info.elapsed }
 }
 

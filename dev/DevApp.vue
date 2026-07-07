@@ -14,7 +14,7 @@
 
     <section class="dev-section">
       <h2 class="dev-section-title">{{ text.whyTitle }}</h2>
-      <DevCardGrid :cards="text.cards" />
+      <DevCardGrid :cards="text.cards" :details="text.details" />
     </section>
 
     <DevFooter :text="text.footerDesc" />
@@ -55,7 +55,7 @@ body {
   min-height: 100vh;
 }
 .dev-page {
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 48px 24px;
 }

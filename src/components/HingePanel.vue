@@ -456,14 +456,14 @@ async function saveSourceFile() {
   sourceSaving.value = false
 }
 
-// When source file changes externally → exit edit mode and reset
-watch([activeTab, () => selection.filePath], async ([tab, file]) => {
-  // Exit edit mode only if a different file was already loaded (not on initial restore)
+// When source file changes → exit edit mode; load content (no tab switch)
+watch(() => selection.filePath, async (file, prev) => {
   if (sourceEditMode.value && fileSrc.path.value && fileSrc.path.value !== file) {
     sourceEditMode.value = false
   }
-  if (tab !== 'source' || !file) return
-  if (!fileSrc.loading.value && fileSrc.path.value === file) return // already loaded
+  if (file) fileTree.expandToPath(file)
+  if (!file) return
+  if (!fileSrc.loading.value && fileSrc.path.value === file && file === prev) return
   await fileSrc.loadFile(file)
 }, { immediate: true })
 
@@ -471,14 +471,6 @@ watch([activeTab, () => selection.filePath], async ([tab, file]) => {
 watch(() => selection.filePath, (fp) => {
   if (fp) panel.lastFile = fp
 })
-
-// When selection.filePath changes → expand tree; gear target → jump to Source tab
-watch(() => selection.filePath, (filePath, prev) => {
-  if (filePath) fileTree.expandToPath(filePath)
-  if (filePath && selection.source === 'gear-preview' && filePath !== prev) {
-    activeTab.value = 'source'
-  }
-}, { immediate: true })
 
 // Sync DOM highlights when attachments change
 watch(

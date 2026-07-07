@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, accessSync, constants } from 'fs'
 import { resolve } from 'path'
 
 // ── Built-in default system prompt (ships with package) ──
@@ -20,6 +20,20 @@ export function resolveAgentScripts(cwd = process.cwd()) {
     continue_session: resolve(hinge, 'continue-session.sh'),
     wrapper: resolve(hinge, '.agent-wrapper.sh'),
   }
+}
+
+/** True when .hinge agent scripts exist and are executable (agent-agnostic). */
+export function probeAgentScripts(cwd = process.cwd()): { ok: boolean; missing?: string } {
+  const scripts = resolveAgentScripts(cwd)
+  for (const [name, path] of Object.entries(scripts)) {
+    if (!existsSync(path)) return { ok: false, missing: name }
+    try {
+      accessSync(path, constants.X_OK)
+    } catch {
+      return { ok: false, missing: name }
+    }
+  }
+  return { ok: true }
 }
 
 /** Read the effective prompt (user override or built-in default) */

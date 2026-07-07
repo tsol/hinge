@@ -15,7 +15,9 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5176,
+    // Default only — project.sh passes --port; must match tunnel + browser URL
+    port: 5174,
+    strictPort: false,
     open: false,
     host: true,
     allowedHosts: true,

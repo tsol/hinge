@@ -20,6 +20,7 @@ export interface PageText {
   tryTitle: string
   tryDesc: string
   footerDesc: string
+  details: string
   items: StepItem[]
   cards: CardItem[]
 }
@@ -34,6 +35,7 @@ const en: PageText = {
   whyTitle: 'Why use it',
   tryTitle: 'Try it',
   tryDesc: 'Open the panel → pick a component → write your task. Works on desktop and phone.',
+  details: 'More',
   footerDesc:
     'Hinge is an open-source Vite Plugin that turns any coding agent into a controllable interface with element selection, file context, and live preview via HMR.',
   items: [
@@ -72,6 +74,7 @@ const ru: PageText = {
   whyTitle: 'Зачем это нужно',
   tryTitle: 'Попробовать',
   tryDesc: 'Открой панель → выбери компонент → напиши задачу. Всё работает и с телефона.',
+  details: 'Подробнее',
   footerDesc:
     'Hinge — open-source Vite Plugin, который превращает любой coding agent в управляемый интерфейс с выбором элементов, файловым контекстом и live-превью через HMR.',
   items: [

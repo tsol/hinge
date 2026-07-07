@@ -26,7 +26,7 @@ export const ru: LocaleMessages = {
   input: 'Ввод',
   files: 'Файлы',
   source: 'Исходник',
-  settings: 'Настройки',
+  settings: 'Конфиг',
   /** Files tab */
   projectFiles: 'Файлы проекта',
   /** Source tab / gear */

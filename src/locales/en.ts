@@ -26,7 +26,7 @@ export const en = {
   input: 'Input',
   files: 'Files',
   source: 'Source',
-  settings: 'Settings',
+  settings: 'Config',
   /** Files tab */
   projectFiles: 'Project Files',
   /** Source tab / gear */

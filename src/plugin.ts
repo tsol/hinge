@@ -154,10 +154,17 @@ DONE="$DIR/\${ALIAS}_done"
 PID_FILE="$PROC/.pid"
 WRAPPER_PID="$DIR/.wrapper_\${ALIAS}.pid"
 HINGE_HOST="$(hostname -s 2>/dev/null || hostname)"
+TRACE="/tmp/hinge-wrapper-trace.log"
+NOW() { date +%s%3N; }
+
+_trace() { printf "[%s] %s\\n" "$(NOW)" "$*" >> "$TRACE" 2>/dev/null || true; }
+
+_trace "START pid=$$ alias=\${ALIAS} type=\${SCRIPT_TYPE}"
 
 _write_pid_files() {
   printf '%s\\n%s\\n' "$$" "$HINGE_HOST" > "$PID_FILE" 2>/dev/null || true
   printf '%s\\n%s\\n' "$$" "$HINGE_HOST" > "$WRAPPER_PID" 2>/dev/null || true
+  _trace "PID_WRITTEN pid_file=\${PID_FILE} wrapper_pid=\${WRAPPER_PID}"
 }
 
 _resolve_folder() {
@@ -169,6 +176,7 @@ _resolve_folder() {
 
 # On cancel (SIGTERM): drop pid only — server renames folder to _new
 _cleanup() {
+  _trace "CLEANUP_SIGTERM pid=$$"
   rm -f "$PID_FILE" "$DONE/.pid" "$WRAPPER_PID" 2>/dev/null || true
   exit 0
 }
@@ -183,8 +191,12 @@ else
     USER_SCRIPT="$DIR/new-session.sh"
 fi
 
+_trace "RUN_SCRIPT script=\${USER_SCRIPT}"
+
 OUTPUT=$("$USER_SCRIPT" "$ALIAS")
 CODE=$?
+
+_trace "SCRIPT_DONE exit_code=\${CODE} output_len=\${#OUTPUT}"
 
 FOLDER="$(_resolve_folder)"
 if [ -z "$FOLDER" ]; then
@@ -193,17 +205,32 @@ if [ -z "$FOLDER" ]; then
 fi
 CHAT_MD="$FOLDER/chat.md"
 
+_trace "WRITE_CHAT folder=\${FOLDER} proc_exists=$([ -d "$PROC" ] && echo yes || echo no) done_exists=$([ -d "$DONE" ] && echo yes || echo no)"
+
 printf "\\n\\n---\\n\\n**Assistant:**\\n%s\\n" "\${OUTPUT:-*(no output)*}" >> "$CHAT_MD"
+WRITE_EXIT=$?
+
+_trace "WRITE_DONE exit=\${WRITE_EXIT} chat_md_size=$(wc -c < "$CHAT_MD" 2>/dev/null || echo 0)"
 
 if [ "$SCRIPT_TYPE" = "new" ] && [ "$CODE" -eq 0 ]; then
   touch "$FOLDER/.session" 2>/dev/null || true
+  _trace "SESSION_CREATED"
 fi
 
-echo "$OUTPUT" || true
+_trace "OUTPUT_ECHOED"
+
 rm -f "$PID_FILE" "$DONE/.pid" "$WRAPPER_PID" 2>/dev/null || true
+_trace "PID_CLEANED"
+
 if [ -d "$PROC" ]; then
   mv "$PROC" "$DONE" 2>/dev/null || true
+  MV_EXIT=$?
+  _trace "MV_DONE src=\${PROC} dst=\${DONE} exit=\${MV_EXIT} proc_exists=$([ -d "$PROC" ] && echo yes || echo no) done_exists=$([ -d "$DONE" ] && echo yes || echo no)"
+else
+  _trace "MV_SKIP proc_missing=\${PROC}"
 fi
+
+_trace "EXIT code=\${CODE}"
 exit $CODE`
 
 const SCRIPTS_TO_ENSURE: Record<string, string> = {

@@ -96,9 +96,7 @@ function probePidFile(pidPath: string): WrapperLivenessInfo | null {
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException)?.code
       if (code === 'EPERM') return { liveness: 'running', pid, elapsed }
-      if (code === 'ESRCH' && !existsSync(`/proc/${pid}`)) {
-        return { liveness: 'running', pid, elapsed }
-      }
+      // ESRCH + no /proc entry = process truly dead, not just missing /proc
       return { liveness: 'stopped', pid, elapsed }
     }
   } catch {

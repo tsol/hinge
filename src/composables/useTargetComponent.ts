@@ -45,7 +45,11 @@ export function useTargetComponent(position: Reactive<CogPosition>) {
   const _dedupedElements = shallowRef<Element[]>([])
 
   function rebuildCandidates() {
-    const raw = getCycleableTargetsAtPoint(position.x, position.y, COG_SIZE)
+    // Convert position (layout coords) → visual coords for elementsFromPoint API
+    const vv = window.visualViewport
+    const vx = position.x - (vv?.offsetLeft ?? 0)
+    const vy = position.y - (vv?.offsetTop ?? 0)
+    const raw = getCycleableTargetsAtPoint(vx, vy, COG_SIZE)
     const seen = new Set<string>()
     const deduped: Element[] = []
     const labels: string[] = []

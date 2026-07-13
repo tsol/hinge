@@ -570,42 +570,38 @@ async function executeSingle(name: string) {
 
         <div v-if="expandedStem === stem(item.name)" class="qr-card__body">
           <!-- Chat UI -->
-          <div class="chat-ui">
-            <!-- History (readonly) -->
+          <!-- History (readonly) -->
+          <div
+            class="chat-history"
+            :class="`chat-history--${stem(item.name)}`"
+            v-if="expandedMessages.length > 0"
+          >
             <div
-              class="chat-history"
-              :class="`chat-history--${stem(item.name)}`"
-              v-if="expandedMessages.length > 0"
+              v-for="(msg, idx) in expandedMessages"
+              :key="idx"
+              class="chat-msg"
+              :class="'chat-msg--' + msg.role"
             >
-              <div
-                v-for="(msg, idx) in expandedMessages"
-                :key="idx"
-                class="chat-msg"
-                :class="'chat-msg--' + msg.role"
-              >
-                <div class="chat-msg__body">
-                  <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? lang.user : lang.assistant }}</div>
-                  <div class="chat-msg__text" v-html="msg.role === 'assistant' ? prettifyMessage(msg.content) : escapeHtml(msg.content)"></div>
-                </div>
+              <div class="chat-msg__body">
+                <div class="chat-msg__role"><span class="chat-msg__avatar">{{ msg.role === 'user' ? '🧑' : '🤖' }}</span> {{ msg.role === 'user' ? lang.user : lang.assistant }}</div>
+                <div class="chat-msg__text" v-html="msg.role === 'assistant' ? prettifyMessage(msg.content) : escapeHtml(msg.content)"></div>
               </div>
             </div>
-            <div v-else class="chat-history chat-history--empty">
-              <p class="drawer-muted">{{ lang.noMessages }}</p>
-            </div>
-
-            <!-- Input row -->
-            <div class="chat-input-row">
-              <textarea
-                class="chat-input"
-                :placeholder="processingTask[item.name] ? lang.waitingResponse : lang.messageAgent"
-                v-model="chatInputs[stem(item.name)]"
-                :disabled="processingTask[item.name]"
-                @keydown.enter.ctrl="sendChat(item.name)"
-                rows="2"
-                spellcheck="false"
-              ></textarea>
-            </div>
           </div>
+          <div v-else class="chat-history chat-history--empty">
+            <p class="drawer-muted">{{ lang.noMessages }}</p>
+          </div>
+
+          <!-- Input row -->
+          <textarea
+            class="chat-input"
+            :placeholder="processingTask[item.name] ? lang.waitingResponse : lang.messageAgent"
+            v-model="chatInputs[stem(item.name)]"
+            :disabled="processingTask[item.name]"
+            @keydown.enter.ctrl="sendChat(item.name)"
+            rows="2"
+            spellcheck="false"
+          ></textarea>
 
           <!-- Actions row -->
           <div v-if="processingTask[item.name]" class="qr-card__processing-bar">
@@ -640,7 +636,7 @@ async function executeSingle(name: string) {
   </div>
 </template>
 
-<style scoped>
+<style>
 .tab-content {
   display: flex;
   flex-direction: column;
@@ -807,20 +803,14 @@ async function executeSingle(name: string) {
   color: #58a6ff;
 }
 .qr-card__body {
-  padding: 0 var(--hinge-spacing-sm, 10px) var(--hinge-spacing-sm, 6px);
+  padding: var(--hinge-spacing-xs, 4px) var(--hinge-spacing-sm, 10px) var(--hinge-spacing-sm, 6px);
   border-top: 1px solid #2a2a4a;
   display: flex;
   flex-direction: column;
-  gap: var(--hinge-spacing-sm, 6px);
+  gap: var(--hinge-spacing-xs, 4px);
 }
 
 /* ── Chat UI ── */
-.chat-ui {
-  display: flex;
-  flex-direction: column;
-  gap: var(--hinge-spacing-xs, 4px);
-  padding-top: var(--hinge-spacing-xs, 4px);
-}
 .chat-history {
   max-height: calc(110px * var(--hinge-scale, 1));
   overflow-y: auto;
@@ -872,13 +862,8 @@ async function executeSingle(name: string) {
 }
 
 /* ── Chat input ── */
-.chat-input-row {
-  display: flex;
-  gap: var(--hinge-spacing-sm, 6px);
-  align-items: flex-end;
-}
 .chat-input {
-  flex: 1;
+  display: block;
   padding: 8px 10px;
   background: #0d1117;
   color: #c9d1d9;

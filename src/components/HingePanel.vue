@@ -848,7 +848,7 @@ const { level: fontLevel, setLevel: setFontLevel, labels: fontLabels, levels: fo
   </Teleport>
 </template>
 
-<style scoped>
+<style>
 .drawer {
   position: fixed;
   top: 0;

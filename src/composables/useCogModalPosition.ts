@@ -1,4 +1,4 @@
-import { computed, watch, toRef, type Ref } from 'vue'
+import { computed, watch, toRef, nextTick, onMounted, type Ref } from 'vue'
 import { COG_SIZE } from '../constants'
 import { useSmoothFollow } from './useSmoothFollow'
 import { usePersistedState } from './usePersistedState'
@@ -95,12 +95,29 @@ export function useCogModalPosition(posX: Ref<number>, posY: Ref<number>) {
   const { current: smoothCorner, stop: stopFollow, snap: snapFollow } =
     useSmoothFollow(modalTarget, 0.04, 0.12)
 
+  function scrollModalIntoView() {
+    nextTick(() => {
+      const el = document.querySelector<HTMLElement>('.cog-modal')
+      if (el) {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      }
+    })
+  }
+
   watch(modalOpen, (open) => {
     if (open) {
       snapFollow()
+      scrollModalIntoView()
     } else {
       stopFollow()
     }
+  })
+
+  // Re-scroll modal into view if viewport resizes (e.g. keyboard opens) while open
+  onMounted(() => {
+    window.visualViewport?.addEventListener('resize', () => {
+      if (modalOpen.value) scrollModalIntoView()
+    })
   })
 
   // Output style — safe clamp in case smoothCorner lags behind target

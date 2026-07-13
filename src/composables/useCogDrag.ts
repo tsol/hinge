@@ -1,24 +1,31 @@
-import { reactive, type Reactive } from 'vue'
+import { type Reactive } from 'vue'
 import { DRAG_THRESHOLD } from '../constants'
-import type { CogPosition } from './useCogPosition'
 
 interface UseCogDragOptions {
-  position: Reactive<CogPosition>
-  clampPosition: () => void
+  position: Reactive<{ x: number; y: number }>
+  setPosition: (x: number, y: number, vw: number, vh: number) => void
 }
 
 export function useCogDrag({
   position,
-  clampPosition,
+  setPosition,
 }: UseCogDragOptions) {
-  const dragState = reactive({
+  const dragState = {
     active: false,
     moved: false,
     offsetX: 0,
     offsetY: 0,
     startX: 0,
     startY: 0,
-  })
+  }
+
+  function getViewport() {
+    const vv = window.visualViewport
+    return {
+      width: vv?.width ?? window.innerWidth,
+      height: vv?.height ?? window.innerHeight,
+    }
+  }
 
   function onCogPointerDown(e: PointerEvent) {
     const target = e.currentTarget as HTMLElement | null
@@ -28,8 +35,13 @@ export function useCogDrag({
     dragState.moved = false
     dragState.startX = e.clientX
     dragState.startY = e.clientY
-    dragState.offsetX = e.clientX - position.x
-    dragState.offsetY = e.clientY - position.y
+    // Convert position (layout coords) to visual coords for offset computation,
+    // because e.clientX/Y are always in visual viewport coords on mobile.
+    const vv = window.visualViewport
+    const visualX = position.x - (vv?.offsetLeft ?? 0)
+    const visualY = position.y - (vv?.offsetTop ?? 0)
+    dragState.offsetX = e.clientX - visualX
+    dragState.offsetY = e.clientY - visualY
     target.setPointerCapture(e.pointerId)
   }
 
@@ -44,9 +56,10 @@ export function useCogDrag({
       dragState.moved = true
     }
 
-    position.x = e.clientX - dragState.offsetX
-    position.y = e.clientY - dragState.offsetY
-    clampPosition()
+    const { width: vw, height: vh } = getViewport()
+    const px = e.clientX - dragState.offsetX
+    const py = e.clientY - dragState.offsetY
+    setPosition(px, py, vw, vh)
   }
 
   function onCogPointerUp(e: PointerEvent) {

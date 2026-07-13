@@ -50,9 +50,27 @@ const text = computed(() => t(locale))
 }
 .dev-header h1 {
   font-size: calc(32px * var(--dev-fs));
-  color: #f0f6fc;
   font-weight: 700;
   letter-spacing: -0.5px;
+  background: linear-gradient(
+    90deg,
+    #ff6b6b,
+    #ffa94d,
+    #ffd43b,
+    #69db7c,
+    #4dabf7,
+    #b197fc,
+    #ff6b6b
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: hinge-rainbow 4s linear infinite;
+}
+
+@keyframes hinge-rainbow {
+  to { background-position: 200% center; }
 }
 .dev-sub {
   color: #8b949e;

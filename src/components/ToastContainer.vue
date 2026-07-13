@@ -31,7 +31,7 @@ const { toasts, dismiss, toggleExpand } = useToast()
   </Teleport>
 </template>
 
-<style scoped>
+<style>
 .toast-container {
   position: fixed !important;
   bottom: var(--hinge-spacing-lg, 16px) !important;

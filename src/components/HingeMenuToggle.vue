@@ -149,7 +149,7 @@ function onClick() {
   </div>
 </template>
 
-<style scoped>
+<style>
 .menu-toggle {
   position: fixed !important;
   top: 0 !important;

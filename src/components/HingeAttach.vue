@@ -145,7 +145,7 @@ function closeDropdown() {
   </div>
 </template>
 
-<style scoped>
+<style>
 .attach-wrapper {
   position: relative;
   display: inline-flex;

@@ -58,7 +58,7 @@ function stopRecording() {
   >{{ recording ? '🔴' : transcribing ? '⏳' : '🎤' }}</button>
 </template>
 
-<style scoped>
+<style>
 .hinge-mic {
   height: 28px !important;
   border: none !important;

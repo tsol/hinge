@@ -10,8 +10,8 @@
 
       <HingeCog
         :cog-style="cogStyle"
-        :position-x="position.x"
-        :position-y="position.y"
+        :position-x="visualPosition.x"
+        :position-y="visualPosition.y"
         :always-on-top="alwaysOnTop"
         :current-label="currentLabel"
         :candidate-labels="candidateLabels"
@@ -99,14 +99,23 @@ onUnmounted(() => {
 })
 
 
-const { position, cogStyle, clampPosition } = useCogPosition()
+const { position, cogStyle, setPositionAbs } = useCogPosition()
+
+// Convert layout position → visual coords for DOM-dependent consumers
+const visualPosition = computed(() => {
+  const vv = window.visualViewport
+  return {
+    x: position.x - (vv?.offsetLeft ?? 0),
+    y: position.y - (vv?.offsetTop ?? 0),
+  }
+})
 const {
   onCogPointerDown,
   onCogPointerMove,
   onCogPointerUp,
 } = useCogDrag({
   position,
-  clampPosition,
+  setPosition: setPositionAbs,
 })
 
 const {
@@ -227,7 +236,7 @@ onUnmounted(() => {
 })
 </script>
 
-<style scoped>
+<style>
 #hinge-app {
   position: fixed !important;
   top: 0 !important;
